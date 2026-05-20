@@ -18,7 +18,7 @@ Multiple ready tasks: emit multiple `Agent` tool calls in a single assistant mes
 ### Agent-tool worktree behavior
 
 `isolation: "worktree"` causes Claude Code to:
-- Create a worktree at `~/.claude/worktrees/agent-<id>/`.
+- Create a worktree at `<repo>/.claude/worktrees/agent-<id>/` (project-level, gitignored).
 - Set the subagent's `pwd` to that worktree.
 - Auto-name the branch `worktree-agent-<id>`.
 - On agent exit: persist worktree + branch if changes were made; auto-clean if not.
@@ -80,11 +80,11 @@ The worker / verifier system prompt (loaded automatically when the subagent type
 
 ```
 Bash(
-  command = "claude-bg-wait \"$(cat <workspace>/spawns/<task-id>.md)\""
+  command = "\"${CLAUDE_PLUGIN_ROOT}/scripts/claude-bg-wait\" \"$(cat <workspace>/spawns/<task-id>.md)\""
 )
 ```
 
-`claude-bg-wait` is bundled in this plugin's `scripts/` directory. It spawns `claude --bg <prompt>`, polls until the bg session is idle-stable, prints session logs to stdout, then `claude stop`s the session. The bg session is a fresh top-level Claude Code session — full Agent tool access (so it can recursively spawn its own workers + further subplanners).
+`claude-bg-wait` is bundled in this plugin's `scripts/` directory. Claude Code sets `${CLAUDE_PLUGIN_ROOT}` per-session to the active plugin's install directory, so the planner's Bash invocation resolves the absolute path at runtime — no PATH symlink needed. It spawns `claude --bg <prompt>`, polls until the bg session is idle-stable, prints session logs to stdout, then `claude stop`s the session. The bg session is a fresh top-level Claude Code session — full Agent tool access (so it can recursively spawn its own workers + further subplanners).
 
 **The bg session's stdout from `claude logs` is noisy** (raw TUI output with ANSI escapes). Don't try to parse it for the handoff. Instead, the subplanner spawn prompt tells the subplanner to write its handoff to a file path you specify, and you `Read` that file after `claude-bg-wait` returns.
 

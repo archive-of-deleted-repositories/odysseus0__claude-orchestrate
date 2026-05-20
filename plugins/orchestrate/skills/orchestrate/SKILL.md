@@ -10,7 +10,7 @@ An explicit `/orchestrate:orchestrate <goal>` fans out a large task across paral
 Adapted from Cursor's `/orchestrate` skill ([cursor/plugins/orchestrate](https://github.com/cursor/plugins/tree/main/orchestrate)). Substrate differences:
 
 - No dispatcher. The Claude Code session is local; it IS the root planner.
-- Workers/verifiers spawn via Claude Code's `Agent` tool with `isolation: "worktree"` (in-process, fresh subagent session, isolated worktree at `~/.claude/worktrees/agent-<id>/`).
+- Workers/verifiers spawn via Claude Code's `Agent` tool with `isolation: "worktree"` (in-process, fresh subagent session, isolated worktree at `<repo>/.claude/worktrees/agent-<id>/`).
 - Subplanners spawn via `claude --bg` (daemon-supervised top-level session, full Agent tool access — required for the subplanner to itself spawn workers). The `claude-bg-wait` wrapper script (bundled in this plugin's `scripts/`) provides a synchronous interface.
 - No Slack, no Andon (user is in-session; Ctrl-C is the emergency stop).
 - No subprocess heartbeat; the planner's own turn drives the loop.

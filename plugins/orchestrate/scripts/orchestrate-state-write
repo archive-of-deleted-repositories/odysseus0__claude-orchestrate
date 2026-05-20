@@ -1,0 +1,43 @@
+#!/bin/bash
+# orchestrate-state-write: atomic JSON write to <workspace>/state.json (or plan.json).
+#
+# Usage:    orchestrate-state-write <target-path>      [content via stdin]
+# Returns:  exit 0 on success; non-zero on error.
+#
+# Writes content from stdin to a sibling tempfile and atomically renames it
+# over the target path. POSIX rename(2) is atomic on the same filesystem, so
+# no partial-file state is ever observable — readers always see either the
+# old content or the new content, never a truncated mid-write.
+#
+# Use this when the planner needs to update state.json after each sweep, or
+# when writing plan.json. Crash-safe across mid-write interruptions.
+
+set -euo pipefail
+
+if [ $# -lt 1 ]; then
+  echo "usage: orchestrate-state-write <target-path>  (content via stdin)" >&2
+  exit 2
+fi
+
+target="$1"
+target_dir="$(dirname "$target")"
+
+if [ ! -d "$target_dir" ]; then
+  echo "orchestrate-state-write: parent directory does not exist: $target_dir" >&2
+  exit 1
+fi
+
+# Tempfile on same filesystem as target (same dir) so rename is atomic.
+tmp=$(mktemp "${target}.XXXXXX")
+
+# Ensure tempfile is cleaned up on any failure path before rename completes.
+trap 'rm -f "$tmp"' EXIT
+
+# Capture stdin to tempfile.
+cat > "$tmp"
+
+# Atomic rename. After this point the target reflects new content fully.
+mv "$tmp" "$target"
+
+# Disarm cleanup trap — file is now in place under target name.
+trap - EXIT
