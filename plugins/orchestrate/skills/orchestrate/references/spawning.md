@@ -4,17 +4,22 @@ Every spawn (worker, verifier, subplanner) is a fresh top-level Claude Code sess
 
 ## The spawn call
 
-```
-Bash(
-  command = "claude-bg-wait \"<worktree-name>\" \"$(cat <workspace>/spawns/<task-id>.md)\""
-)
+The prompt body is inlined into the Bash command via a single-quoted heredoc — this keeps the full content visible to auto-mode's safety classifier (which inspects the literal Bash command string) and avoids a separate on-disk spawn-file plus a Read step:
+
+```bash
+claude-bg-wait "<worktree-name>" "$(cat <<'__ORCH_PROMPT_END__'
+<rendered spawn prompt — multi-line; no escaping needed inside the single-quoted heredoc>
+__ORCH_PROMPT_END__
+)"
 ```
 
-Where `<worktree-name>` is `<rootSlug>-<task-id>` (planner-chosen; must be unique per orchestrate run to avoid worktree-path collisions).
+Where `<worktree-name>` is `<rootSlug>-<task-id>` (planner-chosen; must be unique per orchestrate run to avoid worktree-path collisions). The terminator `__ORCH_PROMPT_END__` is reserved for spawn prompts — pick a different unique tag if the body happens to contain it.
 
 `claude-bg-wait` is the plugin's bundled wrapper (on PATH via `<plugin>/bin/`). It runs `claude --bg --worktree <name> "<prompt>"`, polls `claude agents --json` until the spawned session is idle-stable for several consecutive checks, then `claude stop`s the session. The worktree itself persists on disk at `<repo>/.claude/worktrees/<name>/` — the planner reads the handoff file from there after the wrapper returns.
 
 Multiple ready tasks: emit multiple `Bash` calls in a single assistant message — they run in parallel.
+
+**Forensics.** Each bg session's input prompt is preserved in its session log (`claude logs <session-id>`), so the heredoc-inline pattern doesn't lose the spawn record. A separate `<workspace>/spawns/<task-id>.md` file is optional, not required.
 
 ## Handoff file convention
 
@@ -33,7 +38,7 @@ Cost trade-off: each spawn costs ~30-60s of session boot + plugin load + own quo
 
 ## Spawn-prompt templates
 
-The planner renders one of these templates per ready task and writes it to `<workspace>/spawns/<task-id>.md`, then `Bash(claude-bg-wait <worktree-name> "$(cat spawns/<task-id>.md)")`.
+The planner renders one of these templates per ready task and inlines it into a `Bash(claude-bg-wait <worktree-name> "$(cat <<'__ORCH_PROMPT_END__' ... __ORCH_PROMPT_END__ )")` call (see "The spawn call" above for the exact shape).
 
 ### Worker template
 

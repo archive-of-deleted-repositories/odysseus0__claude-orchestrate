@@ -123,18 +123,25 @@ Your turn IS the heartbeat. There is no subprocess.
    - Else: all terminal; break.
 3. **Render spawn prompts** for each ready task (see `spawning.md` for the canonical shape). Critical step for `dependsOn`: paste each upstream handoff body verbatim under `## Upstream handoffs`.
 4. **Mark tasks running** in state.json: `status: running`, increment `attempts`, set `startedAt`. Persist.
-5. **Spawn ready tasks (uniform substrate).** Every task type uses the same spawn mechanism:
+5. **Spawn ready tasks (uniform substrate, heredoc-inline).** Every task type uses the same spawn mechanism:
    - Pick a worktree name: `<rootSlug>-<task-id>` (unique per orchestrate run).
    - Render the appropriate spawn-prompt template (worker, verifier, or subplanner — see `references/spawning.md` for each verbatim).
-   - Write the rendered prompt to `<workspace>/spawns/<task-id>.md` (forensic record on disk).
-   - Invoke: `Bash(command: "claude-bg-wait \"<worktree-name>\" \"$(cat <workspace>/spawns/<task-id>.md)\"")`.
+   - Invoke `claude-bg-wait` with the rendered prompt **inlined via a single-quoted heredoc** in the Bash command itself:
+
+     ```bash
+     claude-bg-wait "<worktree-name>" "$(cat <<'__ORCH_PROMPT_END__'
+     You are a worker in an orchestrated task. ...
+     <full rendered prompt body — multi-line, no escaping needed>
+     __ORCH_PROMPT_END__
+     )"
+     ```
+
+     The single-quoted opening tag (`<<'__ORCH_PROMPT_END__'`) suppresses all shell expansion inside the body — backticks, `$`, backslashes pass through literally. Pick a terminator string that doesn't appear in the prompt body (`__ORCH_PROMPT_END__` is reserved for this).
    - Emit multiple `Bash` calls in a single assistant message to parallelize ready tasks.
 
-   **Note on permission modes.** This wrapper pattern (`$(cat <spawn-file>)` into `claude --bg`) is opaque to safety classifiers — they see "Bash invocation references a file" without the prompt content visible inline. In **auto mode**, the classifier may block such invocations with "unverifiable agent-inferred input." Two ways to handle this:
-   - **Recommended for long autonomous runs**: invoke the root planner from a `claude --dangerously-skip-permissions` session (the `ccc` alias). The orchestrate plan was approved by the operator at Phase 1; workers act under that mandate. No classifier friction; no per-spawn token tax.
-   - **If auto-mode is required**: replace the `$(cat <file>)` substitution with a heredoc that inlines the prompt in the Bash command itself. The classifier sees the content inline, no file opacity. Costs longer Bash commands but no extra tool calls.
+   **Why heredoc-inline and not `$(cat <file>)`.** Auto-mode's safety classifier inspects the literal Bash command string. With `$(cat <spawn-file>)`, the prompt content lives in a separate file the classifier can't see — it reads "agent-inferred input to claude --bg" and may block. With the heredoc form, the entire prompt body is **visible inline in the Bash command**, the classifier audits exactly what's being sent, and the spawn proceeds without friction. Same token cost as the file-based pattern (the prompt body shows up once in the Bash command), no extra tool calls, no separate file on disk.
 
-   Avoid the seductive-but-wasteful `Write → Read → Bash($(cat))` pattern (one extra Read tool call PLUS the prompt body duplicated in the transcript). The two options above are both cheaper.
+   **Spawn forensics.** The bg session's full input prompt remains inspectable post-hoc via `claude logs <session-id>` and `claude agents --json` — no separate `<workspace>/spawns/<task-id>.md` file needed. If you do want a disk-resident copy for audit, `Write` it AFTER the spawn fires (don't gate the Bash call on it).
 
    `claude-bg-wait` spawns `claude --bg --worktree <name> "<prompt>"`, polls the bg session via `claude agents --json` until idle-stable, prints session logs to stdout (diagnostic only — handoff is read from disk), then `claude stop`s the session. The worktree at `<repo>/.claude/worktrees/<name>/` persists; the planner reads the handoff from there. The wrapper is on PATH because Claude Code adds every installed plugin's `bin/` directory to PATH at session start.
 
@@ -211,7 +218,7 @@ If you are a subplanner being retried after a failed attempt, `git reset --hard 
 
 ## Hard rules
 
-1. **Planners do no coding.** No `Edit` or `Write` outside `<workspace>/` (and the spawns/ directory you write spawn prompts to). No `git merge` in the planner's session. No conflict resolution. If you feel the urge, publish a worker task.
+1. **Planners do no coding.** No `Edit` or `Write` outside `<workspace>/`. No `git merge` in the planner's session. No conflict resolution. If you feel the urge, publish a worker task.
 2. **Workers are isolated.** You cannot speak to them mid-run; you cannot have them speak to each other. Spawn → handoff → done.
 3. **The spawn prompt is the only thing the worker sees.** No env vars to share data, no shared files outside the upstream handoff relay. Bake everything the worker needs into the prompt.
 4. **Don't end your turn while the workspace has non-terminal tasks.**

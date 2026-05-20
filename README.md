@@ -69,7 +69,7 @@ The five primitives the port realizes (substrate-agnostic, lifted from Cursor's 
 
 1. **Task** — `plan.json` entry: `scopedGoal`, `pathsAllowed`, `acceptance`, `verify` recipe, `startingRef`, `dependsOn`, `measurements`, `maxAttempts`.
 2. **Handoff** — markdown file with `## Status`, `## Branch`, `## What I did`, `## Measurements`, `## Verification`, `## Notes`, `## Suggested follow-ups`. Written by the spawned session inside its own worktree at `.orchestrate/handoffs/<task-id>.md`. The planner reads from the worktree path, copies to the central `<workspace>/handoffs/`.
-3. **Workspace** — `.orchestrate/<rootSlug>/` in the repo root: `plan.json`, `state.json`, `handoffs/`, `attention.log`, `spawns/`. Git-tracked (or gitignored — your call).
+3. **Workspace** — `.orchestrate/<rootSlug>/` in the repo root: `plan.json`, `state.json`, `handoffs/`, `attention.log`. (Spawn prompts are inlined into the planner's Bash calls via single-quoted heredocs — no separate `spawns/` file needed; bg session logs preserve them via `claude logs <id>`.) Git-tracked (or gitignored — your call).
 4. **Roles** — planner, worker, verifier, subplanner. Each is a role contract baked into a spawn-prompt template, not a separate Claude Code subagent.
 5. **Loop** — in-process inside the planner's turn. Each ready task spawned via `Bash(claude-bg-wait ...)`; multiple `Bash` calls in one assistant message parallelize.
 
