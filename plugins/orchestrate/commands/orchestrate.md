@@ -11,7 +11,7 @@ Discover here before you publish tasks (read existing repo state, scan for relev
 
 Loop hygiene:
 - Run the reconcile loop in-process inside this turn. Do not detach. The loop IS your turn.
-- After publishing tasks and surfacing the plan for user approval, enter the reconcile loop: spawn ready tasks (workers/verifiers via Agent tool; subplanners via `Bash(claude-bg-wait …)`), wait for handoffs, persist state, repeat until no pending task is reachable.
+- After publishing tasks and surfacing the plan for user approval, enter the reconcile loop: spawn ready tasks (all task types via `Bash(claude-bg-wait <worktree-name> <prompt>)`), wait for handoffs, persist state, repeat until no pending task is reachable.
 - On any task transitioning to `error`: read the synthetic failure handoff at `<workspace>/handoffs/<task>-failure.md`, decide retry / split / escalate / drop, then continue. Each retry costs another spawn — after 2 attempts on the same task, prefer abandon (drop from plan.json, replan around it) over a 3rd attempt unless you have specific evidence the next retry will succeed.
 - Don't end your turn while this workspace has non-terminal tasks.
 

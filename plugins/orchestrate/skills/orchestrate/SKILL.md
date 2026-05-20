@@ -7,11 +7,10 @@ description: "Use only when the user explicitly types `/orchestrate:orchestrate 
 
 An explicit `/orchestrate:orchestrate <goal>` fans out a large task across parallel Claude Code subagents running in isolated git worktrees. Workers don't talk to each other; they talk up through structured handoffs. The spawn, wait, and handoff loop lives in the planner's own turn. The planner writes `plan.json`, drives the loop, reads handoffs to decide what comes next. Long-running agent loops drift; a script with a JSON state file keeps its footing — in Claude Code the "script" is the planner's structured procedure in `references/planner.md`.
 
-Adapted from Cursor's `/orchestrate` skill ([cursor/plugins/orchestrate](https://github.com/cursor/plugins/tree/main/orchestrate)). Substrate differences:
+Adapted from Cursor's `/orchestrate` skill ([cursor/plugins/orchestrate](https://github.com/cursor/plugins/tree/main/orchestrate)). Substrate:
 
 - No dispatcher. The Claude Code session is local; it IS the root planner.
-- Workers/verifiers spawn via Claude Code's `Agent` tool with `isolation: "worktree"` (in-process, fresh subagent session, isolated worktree at `<repo>/.claude/worktrees/agent-<id>/`).
-- Subplanners spawn via `claude --bg` (daemon-supervised top-level session, full Agent tool access — required for the subplanner to itself spawn workers). The `claude-bg-wait` wrapper script (bundled in this plugin's `bin/`) provides a synchronous interface.
+- **Uniform spawn substrate.** Every spawn (worker, verifier, subplanner) is a fresh top-level Claude Code session in its own isolated git worktree, spawned via `claude --bg --worktree <name>` and awaited via the bundled `claude-bg-wait` wrapper (on PATH via `<plugin>/bin/`). Sessions are daemon-supervised, have stable ids visible in `claude agents --json`, and can be re-bound to after parent crashes (recoverRunning equivalent).
 - No Slack. **Andon (cross-tree pause) is file-based:** the operator touches `.orchestrate/<rootSlug>/andon` from any terminal to halt new spawns across the tree; removing the file resumes. Every planner (root + all subplanner descendants) checks the root's andon file before each spawn cycle. See `references/planner.md` Phase 2 sweep step 0.
 - No subprocess heartbeat; the planner's own turn drives the loop.
 
@@ -20,7 +19,7 @@ Adapted from Cursor's `/orchestrate` skill ([cursor/plugins/orchestrate](https:/
 These rules make the tree self-converging without global coordination.
 
 1. **Planners own scopes and publish tasks. They do no coding.** Writing `plan.json`, reading handoffs, and deciding what's next are planner work. Editing files, running `git merge`, and fixing conflicts inline are not. If a planner feels the urge to code, it publishes a task for a worker instead.
-2. **Planners don't know who picks up their tasks.** Routing each task to a fresh subagent (worker/verifier via Agent tool) or a fresh top-level session (subplanner via claude-bg-wait) is mechanical. The planner's mental model stays at the task level.
+2. **Planners don't know who picks up their tasks.** Routing each task to a fresh top-level Claude Code session (via `claude-bg-wait <worktree-name> <prompt>`) is mechanical. The planner's mental model stays at the task level.
 3. **Workers are isolated.** One task, one worktree, no channel to any other agent. One handoff when done.
 4. **Subplanners are recursive planners.** A planner publishes a "subplan this slice" task; the subplanner fully owns that slice and hands back an aggregated handoff. Subplanners can spawn their own subplanners — no depth limit.
 5. **Continuous motion via handoffs.** A planner that thought it was done can receive a late handoff and replan. No "finished" state until the planner decides to stop publishing.
@@ -30,10 +29,10 @@ These rules make the tree self-converging without global coordination.
 
 | Node           | Spawn substrate | Scope                            | Output                                  |
 | -------------- | --------------- | -------------------------------- | --------------------------------------- |
-| Root planner   | `/orchestrate:orchestrate <goal>` slash command (user-initiated) | Entire user goal | User-facing summary |
-| Subplanner (↻) | `Bash(claude-bg-wait "...")` (daemon-supervised top-level session) | One slice of parent's scope | Handoff file the parent reads |
-| Worker         | `Agent(subagent_type: "orchestrate:orchestrate-worker", isolation: "worktree")` | One concrete task | Handoff file in its worktree |
-| Verifier       | `Agent(subagent_type: "orchestrate:orchestrate-verifier", isolation: "worktree")` | One target's acceptance criteria | Verdict handoff file in its worktree |
+| Root planner   | `/orchestrate:orchestrate <goal>` slash command (user-initiated; root runs in the user's session) | Entire user goal | User-facing summary |
+| Subplanner (↻) | `Bash(claude-bg-wait <worktree-name> <prompt>)` | One slice of parent's scope | Handoff file in its worktree |
+| Worker         | `Bash(claude-bg-wait <worktree-name> <prompt>)` | One concrete task | Handoff file in its worktree |
+| Verifier       | `Bash(claude-bg-wait <worktree-name> <prompt>)` | One target's acceptance criteria | Verdict handoff file in its worktree |
 | Git            | n/a             | Shared medium                    | Branches (code) + handoffs/ (meaning)   |
 
 ## What to read next

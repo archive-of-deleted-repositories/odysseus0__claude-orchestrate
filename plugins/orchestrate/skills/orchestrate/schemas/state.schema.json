@@ -39,7 +39,7 @@
         },
         "agentId": {
           "type": ["string", "null"],
-          "description": "Agent tool's returned agentId. Used for lineage (parentAgentId) and SendMessage."
+          "description": "The bg session's sessionId (from `claude --bg` output). Used for lineage (parentAgentId), recoverRunning, and CLI inspection via `claude agents`."
         },
         "parentAgentId": {
           "type": ["string", "null"],
@@ -47,11 +47,11 @@
         },
         "worktreePath": {
           "type": ["string", "null"],
-          "description": "Absolute path to the worker's worktree, returned by Agent tool with isolation=worktree."
+          "description": "Absolute path to the spawned session's worktree, created by `claude --bg --worktree <name>`. Lives at <repo>/.claude/worktrees/<name>."
         },
         "branch": {
           "type": ["string", "null"],
-          "description": "Worker's actual branch name. Returned by Agent tool as worktreeBranch."
+          "description": "Spawned session's branch name (auto-assigned by Claude Code as `worktree-<name>` when `--worktree <name>` is used)."
         },
         "startingRef": {
           "type": ["string", "null"],

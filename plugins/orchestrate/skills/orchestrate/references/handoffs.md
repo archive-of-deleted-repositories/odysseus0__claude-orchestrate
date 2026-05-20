@@ -6,7 +6,7 @@ Handoffs are the only way information moves between nodes. Workers produce one; 
 
 Workers write their handoff to `.orchestrate/handoffs/<task-id>.md` inside their worktree (NOT inside `<workspace>/handoffs/` — that path doesn't exist in the worker's worktree because the central workspace is in the planner's worktree). The worker commits this file on its branch.
 
-The planner, after the Agent tool returns, reads the file from `<worktreePath>/.orchestrate/handoffs/<task-id>.md` and copies it to the central `<workspace>/handoffs/<task-id>.md`.
+The planner, after `claude-bg-wait` returns, reads the file from `<worktreePath>/.orchestrate/handoffs/<task-id>.md` and copies it to the central `<workspace>/handoffs/<task-id>.md`.
 
 This double-storage is intentional:
 - Worker-side copy: preserves handoff in the worker's branch history for forensics; survives if the planner crashes between read and copy.
@@ -26,7 +26,7 @@ For each handoff arrival:
 
 ## Synthetic failure handoffs
 
-When a worker exits without writing its handoff (Agent tool error, context-limit, network drop, tool error), the planner writes `handoffs/<task-id>-failure.md` so the trail isn't silent. Template:
+When a spawned session exits without writing its handoff (wrapper error, context-limit, network drop, tool error), the planner writes `handoffs/<task-id>-failure.md` so the trail isn't silent. Template:
 
 ```markdown
 <!-- orchestrate failure handoff
@@ -48,7 +48,7 @@ Terminated: <iso>
 Duration: <ms>
 Worktree: <path or null>
 Branch: <branch or null>
-Tool result summary: <truncated Agent tool result prose>
+Wrapper output summary: <truncated claude-bg-wait stderr/stdout>
 
 ## Suggested next steps
 - <one bullet per option; planner picks>
@@ -56,7 +56,7 @@ Tool result summary: <truncated Agent tool result prose>
 
 ### Classifier heuristics
 
-Inspect the Agent tool result prose for signals:
+Inspect the `claude-bg-wait` exit code + stderr/stdout for signals:
 
 - `tool-error` — result contains `tool_use_failed`, `tool error`, generic SDK error stack
 - `network-drop` — result contains `fetch failed`, `ETIMEDOUT`, `ECONN`, `socket`, `dns`, `disconnect`
@@ -78,7 +78,7 @@ After 2 retries on the same task, prefer abandon (drop from `plan.json`, replan 
 
 ## Finished-without-handoff sidecar
 
-If the Agent tool returned cleanly but no handoff file exists at the expected path, the worker forgot to write it. Planner writes `handoffs/<task-id>-finished-no-handoff.md`:
+If `claude-bg-wait` exited cleanly but no handoff file exists at the expected worktree path, the worker forgot to write it. Planner writes `handoffs/<task-id>-finished-no-handoff.md`:
 
 ```markdown
 <!-- orchestrate finished-no-handoff sidecar
@@ -91,7 +91,7 @@ note: worker subagent ended without writing .orchestrate/handoffs/<task-id>.md
 
 Status: error (worker ended without structured handoff)
 Branch: <branch>
-Tool result summary (raw): <last ~500 chars of Agent tool prose>
+Wrapper output (raw): <last ~500 chars of claude-bg-wait stdout/stderr>
 
 ## Suggested next steps
 - Inspect worker's worktree at <worktreePath> for evidence of work.
@@ -99,7 +99,7 @@ Tool result summary (raw): <last ~500 chars of Agent tool prose>
 - If not, abandon and replan.
 ```
 
-Treat the raw Agent tool prose as the worker's intent; decide retry or abandon.
+Treat the raw wrapper output as the worker's intent; decide retry or abandon. The worker's worktree still exists on disk — inspect files there for evidence.
 
 ## Upstream handoffs in downstream prompts (context relay)
 
@@ -167,7 +167,7 @@ If a subplanner is retried after a failed attempt, **respawn from your own branc
 
 ## Verifier handoffs
 
-A verifier's final message is a verdict on one target task's acceptance criteria. Format and verdict vocabulary are in the plugin's `agents/orchestrate-verifier.md` (loaded as the `orchestrate:orchestrate-verifier` subagent type). Key behavior:
+A verifier's final action is to write a verdict file on one target task's acceptance criteria. Format and verdict vocabulary are in the verifier spawn-prompt template (`references/spawning.md` → Verifier template). Key behavior:
 
 - `## Verification` is parsed by the planner and persisted on the **target task's** state row (`tasks[].verification` in state.json) — not on the verifier's row. So post-run reports bucket "fixed-and-verified" properly.
 - Workers and subplanners may self-report a `## Verification` line. A later verifier overrides the self-report on the same target row.

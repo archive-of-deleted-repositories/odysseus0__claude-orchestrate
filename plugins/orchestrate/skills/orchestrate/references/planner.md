@@ -31,9 +31,9 @@ If `<workspace>/plan.json` exists when you start:
 
 1. Load `plan.json` and `state.json`.
 2. For each task with `status: running`:
-   - Check if `task.worktreePath` is set in state. If so, look for `<worktreePath>/.orchestrate/handoffs/<task-id>.md`.
-   - If the handoff file exists with content: adopt it (copy to workspace handoffs, parse, mark `handed-off`).
-   - Otherwise: mark `status: error`, `failureMode: orphaned`, write a synthetic `<task-id>-failure.md` noting the session was interrupted.
+   - **First, check if the spawned bg session is still alive.** Run `claude agents --json | jq '.[] | select(.sessionId|startswith("<task.agentId>"))'`. If alive: the parent crashed but the spawned session kept running. Re-bind by running `claude-bg-wait "<task.worktree-name>" "<resume-noop>"` against the still-alive session — actually simpler: just poll `claude agents --json` for that sessionId until idle, then read its handoff. (Or `claude attach <id>` interactively for debug.) This is the **recoverRunning equivalent** that Cursor's design has — every spawn is a daemon-supervised session with a stable id, so reattach-by-id is possible.
+   - If the session is gone, check `<task.worktreePath>/.orchestrate/handoffs/<task-id>.md` for a committed handoff (worker finished before parent died). If present, adopt it.
+   - Otherwise (no live session AND no committed handoff): mark `status: error`, `failureMode: orphaned`, write a synthetic `<task-id>-failure.md` noting the session was interrupted.
 3. Surface to the user (root) or skip surfacing (subplanner — silent resume): "Resuming `<rootSlug>`: N tasks already terminal, M still pending."
 4. Proceed to Phase 2 (skip Phase 1).
 
@@ -123,15 +123,21 @@ Your turn IS the heartbeat. There is no subprocess.
    - Else: all terminal; break.
 3. **Render spawn prompts** for each ready task (see `spawning.md` for the canonical shape). Critical step for `dependsOn`: paste each upstream handoff body verbatim under `## Upstream handoffs`.
 4. **Mark tasks running** in state.json: `status: running`, increment `attempts`, set `startedAt`. Persist.
-5. **Spawn ready tasks**. Substrate depends on type:
-   - **worker** / **verifier**: `Agent(subagent_type: "orchestrate:orchestrate-worker" | "orchestrate:orchestrate-verifier", isolation: "worktree", description: "<rootSlug>/<task-name>", prompt: <rendered>)`. Emit multiple calls in a single assistant message to parallelize.
-   - **subplanner**: `Bash(command: "claude-bg-wait \"$(cat <spawn-prompt-file>)\"")`. The bg session is a fresh top-level Claude Code session with full Agent tool access — it can recursively spawn its own workers + further subplanners. Spawn-prompt file lives at `<workspace>/spawns/<task-id>.md` (write it as part of step 3). One Bash call per subplanner. Multiple Bash calls in one message parallelize them. (`claude-bg-wait` is the plugin's bundled wrapper; it's on PATH because Claude Code adds every installed plugin's `bin/` directory to PATH automatically.)
+5. **Spawn ready tasks (uniform substrate).** Every task type uses the same spawn mechanism:
+   - Pick a worktree name: `<rootSlug>-<task-id>` (unique per orchestrate run).
+   - Render the appropriate spawn-prompt template (worker, verifier, or subplanner — see `references/spawning.md` for each verbatim).
+   - Write the rendered prompt to `<workspace>/spawns/<task-id>.md`.
+   - Invoke: `Bash(command: "claude-bg-wait \"<worktree-name>\" \"$(cat <workspace>/spawns/<task-id>.md)\"")`.
+   - Emit multiple `Bash` calls in a single assistant message to parallelize ready tasks.
+
+   `claude-bg-wait` spawns `claude --bg --worktree <name> "<prompt>"`, polls the bg session via `claude agents --json` until idle-stable, prints session logs to stdout (diagnostic only — handoff is read from disk), then `claude stop`s the session. The worktree at `<repo>/.claude/worktrees/<name>/` persists; the planner reads the handoff from there. The wrapper is on PATH because Claude Code adds every installed plugin's `bin/` directory to PATH at session start.
+
 6. **Process each result**:
-   - For workers/verifiers: parse `worktreePath`, `worktreeBranch`, `agentId` from Agent tool result metadata. `Read` `<worktreePath>/.orchestrate/handoffs/<task-id>.md`. Copy to `<workspace>/handoffs/<task-id>.md`.
-   - For subplanners: the subplanner wrote its handoff to a path you specified in its spawn prompt (under `## Handoff file path`). Convention: tell it to write to `<workspace>/handoffs/<task-id>.md` (the bg session inherited your cwd, so it has access). Read that file.
-   - Parse `## Status`, `## Branch`, `## Verification`. Update state.json: `status` (handed-off | partial | blocked, mapping to handoff Status), `branch`, `verification` (for verifiers, persist on target task's row), `worktreePath` (if applicable), `finishedAt`.
+   - The spawned session wrote its handoff to `.orchestrate/handoffs/<task-id>.md` in its own worktree. `Read` the file at `<repo>/.claude/worktrees/<worktree-name>/.orchestrate/handoffs/<task-id>.md`.
+   - Copy it to `<workspace>/handoffs/<task-id>.md`.
+   - Parse `## Status`, `## Branch`, `## Verification`. Update state.json: `status` (handed-off | partial | blocked, mapping to handoff Status), `branch`, `verification` (for verifiers, persist on target task's row), `worktreePath`, `agentId` (the bg session id), `finishedAt`.
    - If handoff file missing: write synthetic `<task-id>-finished-no-handoff.md`; set `status: error`, `failureMode: finished-no-handoff`.
-   - If spawn indicated abnormal termination (Agent tool error, claude-bg-wait non-zero exit): write synthetic `<task-id>-failure.md`; set `status: error`, `failureMode` from classifier.
+   - If `claude-bg-wait` exited non-zero: write synthetic `<task-id>-failure.md`; set `status: error`, `failureMode` from classifier.
 7. **Rerun measurements** (if task declares any): for each `{name, command}`, run via Bash with `cwd = <worktreePath>` (for workers) or `cwd = <workspace>` (for subplanners; their final deliverable branch is in their handoff's `## Branch`). Compare with worker's `## Measurements` block. >10% drift or unit mismatch → append to `attention.log`.
 8. **Stream attention.log deltas** to the user (root only).
 9. **Exit-on-error pause** (root only): if any task entered `status: error` this sweep, surface to user with the failure mode and suggested action (retry / abandon / edit plan / continue with siblings). Wait for direction before next sweep. Subplanner: don't pause; auto-decide per retry policy in `handoffs.md` and continue.

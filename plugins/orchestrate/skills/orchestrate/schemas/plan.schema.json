@@ -38,7 +38,7 @@
         "id": {
           "type": "string",
           "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
-          "description": "Kebab-case unique identifier within plan. Used as handoff filename and in Agent tool description."
+          "description": "Kebab-case unique identifier within plan. Used as handoff filename and combined with rootSlug as the `<rootSlug>-<id>` worktree name passed to claude-bg-wait."
         },
         "name": {
           "type": "string",

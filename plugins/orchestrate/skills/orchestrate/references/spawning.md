@@ -1,111 +1,251 @@
 # Spawning
 
-The contracts between planner and the three spawn substrates (Agent tool for workers/verifiers; `claude-bg-wait` for subplanners).
+Every spawn (worker, verifier, subplanner) is a fresh top-level Claude Code session in an isolated git worktree. **One substrate, one mechanism, one mental model.**
 
-## Workers and verifiers: Agent tool
+## The spawn call
 
 ```
-Agent(
-  subagent_type = "orchestrate:orchestrate-worker" | "orchestrate:orchestrate-verifier",
-  isolation     = "worktree",
-  description   = "<rootSlug>/<task-id>",      # appears in spinner / logs
-  prompt        = <rendered spawn prompt>,
+Bash(
+  command = "claude-bg-wait \"<worktree-name>\" \"$(cat <workspace>/spawns/<task-id>.md)\""
 )
 ```
 
-Multiple ready tasks: emit multiple `Agent` tool calls in a single assistant message. They run in parallel.
+Where `<worktree-name>` is `<rootSlug>-<task-id>` (planner-chosen; must be unique per orchestrate run to avoid worktree-path collisions).
 
-### Agent-tool worktree behavior
+`claude-bg-wait` is the plugin's bundled wrapper (on PATH via `<plugin>/bin/`). It runs `claude --bg --worktree <name> "<prompt>"`, polls `claude agents --json` until the spawned session is idle-stable for several consecutive checks, then `claude stop`s the session. The worktree itself persists on disk at `<repo>/.claude/worktrees/<name>/` — the planner reads the handoff file from there after the wrapper returns.
 
-`isolation: "worktree"` causes Claude Code to:
-- Create a worktree at `<repo>/.claude/worktrees/agent-<id>/` (project-level, gitignored).
-- Set the subagent's `pwd` to that worktree.
-- Auto-name the branch `worktree-agent-<id>`.
-- On agent exit: persist worktree + branch if changes were made; auto-clean if not.
+Multiple ready tasks: emit multiple `Bash` calls in a single assistant message — they run in parallel.
 
-Result format (after the prose):
+## Handoff file convention
+
+Every spawned session writes its handoff to `.orchestrate/handoffs/<task-id>.md` **in its own worktree**. The planner reads it from `<repo>/.claude/worktrees/<worktree-name>/.orchestrate/handoffs/<task-id>.md` after `claude-bg-wait` returns, then copies the content to the central `<workspace>/handoffs/<task-id>.md`.
+
+This is uniform across worker / verifier / subplanner. No special-casing per role.
+
+## Why this substrate uniformly
+
+- **Recoverable** — every spawn has a stable `sessionId` queryable via `claude agents --json`. If the parent planner crashes mid-run, Phase 0 recovery can re-bind to live in-flight sessions instead of marking them orphaned. (See `references/planner.md` Phase 0.)
+- **Isolated** — `--worktree` gives each spawn its own git worktree on its own auto-named branch. Sibling-isolation is automatic; the spawn prompt doesn't need to ask the agent to create one.
+- **Full Agent tool access** — every spawned session is a top-level Claude Code process, so it has `Agent` tool. Subplanners can recursively spawn their own children (workers + further subplanners) via `Bash(claude-bg-wait ...)` exactly the same way the root planner does.
+- **Operations** — `claude agents --json` shows the entire orchestrate tree's status from one CLI call. `claude attach <id>` opens any node in a terminal for live debugging.
+
+Cost trade-off: each spawn costs ~30-60s of session boot + plugin load + own quota, vs. the ~10-20s subagent-spawn we'd get via the `Agent` tool with `isolation: "worktree"`. We pay it for the recoverability + uniformity + tree-visibility. Orchestrate runs are by definition multi-step decompositions; the per-worker overhead is acceptable in that context.
+
+## Spawn-prompt templates
+
+The planner renders one of these templates per ready task and writes it to `<workspace>/spawns/<task-id>.md`, then `Bash(claude-bg-wait <worktree-name> "$(cat spawns/<task-id>.md)")`.
+
+### Worker template
 
 ```
-agentId: <id> (use SendMessage with to: '<id>' to continue this agent)
-worktreePath: /Users/.../agent-<id>
-worktreeBranch: worktree-agent-<id>
-```
+You are a worker in an orchestrated task. You do not communicate with any other agents. You produce one handoff when done.
 
-Parse these lines. Persist `agentId`, `worktreePath`, `worktreeBranch` to state.json for the task.
+Overall goal (context only; don't try to own it):
 
-### Worker/verifier spawn prompt template
+<plan.goal>
 
-```
-## Overall goal
-<plan.goal verbatim — for context, not ownership>
+Your scoped task:
 
-## Your scoped task
-<task.scopedGoal verbatim>
+<task.scopedGoal>
 
-## Paths you may modify
+Paths you may MODIFY (read any file in the repo):
 <task.pathsAllowed, one per line, or "(no restriction)">
 
-## Paths you must NOT modify
+Do NOT modify:
 <task.pathsForbidden, one per line, or "(none)">
 
-(Note: even if `pathsForbidden` lists `.orchestrate/**` or a parent thereof, the worker's own handoff file at `.orchestrate/handoffs/<task-id>.md` in its worktree is implicitly carved out — the worker writes that as part of its role contract, not as part of task work. Don't list `.orchestrate/handoffs/<task-id>.md` in pathsForbidden under any circumstance.)
+(The path `.orchestrate/handoffs/<task.id>.md` in your worktree is implicitly carved out for your handoff regardless of pathsForbidden.)
 
-## Acceptance criteria
+Acceptance criteria:
 - <criterion 1>
 - <criterion 2>
 
-## Verify recipe
-<task.verify markdown, if present>
+<verify recipe, if task.verify is present>
 
-## Starting ref
-<task.startingRef, only if present — worker `git reset --hard`s to this as first action>
+Starting ref (if task.startingRef is set):
+- Your repo starts from `<task.startingRef>`. Your worktree's current HEAD is the planner's branch; before doing any work, run `git reset --hard <task.startingRef>` to position on the right ref.
 
-## Measurements
+Measurements (if task.measurements is non-empty):
 - <m.name>: `<m.command>`
-(only if task.measurements is non-empty; otherwise omit the section)
+(One line per declared measurement.)
 
-## Upstream handoffs
+Upstream handoffs (if task.dependsOn has entries with status: handed-off):
+
 ### handoff: <dep-id>
-<verbatim handoff body>
+<verbatim body of <workspace>/handoffs/<dep-id>.md>
 
 ### handoff: <other-dep-id>
-<verbatim handoff body>
-(only if task.dependsOn has entries with status: handed-off; otherwise omit)
+<verbatim body>
+
+Branch discipline:
+- Push commits to your current branch (auto-named by Claude Code; visible via `git branch --show-current`).
+- Do not rename your branch, do not merge into another branch, do not rebase, do not open a PR. The planner owns integration via separate merge tasks.
+
+Quality floor:
+- No placeholder TODOs. Every public function gets a real implementation.
+- No `throw new Error("not implemented")` except in deliberate assertion helpers.
+- Per the code discipline: no narrative comments. Comment only non-obvious *why*.
+- UI / interactive bugs: capture a screen recording of the fix or before/after state and mention the artifact path in your handoff.
+
+If you crash, OOM, or hit a context limit, the planner writes a postmortem handoff on your behalf. Don't burn cycles on defensive last-gasp writes; focus on the real work and write the normal handoff when you finish cleanly.
+
+Before your final turn, write your handoff to `.orchestrate/handoffs/<task.id>.md` in your worktree (mkdir -p first), `git add` + `git commit -m "handoff: <task.id>"`. The planner reads this file as the canonical return; your final assistant message is diagnostic only.
+
+Use exactly this structure for the handoff file:
+
+## Status
+success | partial | blocked
+
+## Branch
+`<actual branch name>` (or "(no branch)" if you produced no code)
+
+## What I did
+- <high-level summary, per file if useful>
+
+## Measurements
+- <metric>: <before> <op> <after>
+(One line per quantitative acceptance criterion; `<op>` ∈ {`→`, `<=`, `<`, `>`, `>=`, `==`}. If no measurements declared, write `(none)`.)
+
+## Verification
+<one of: live-ui-verified | unit-test-verified | type-check-only | not-verified>
+
+Self-report the strongest evidence you produced for the fix itself, not for the code compiling. A verifier may override this later; without one, this value is what the planner uses to bucket your work:
+
+- `live-ui-verified`: you reproduced the bug live and confirmed the fix removes it.
+- `unit-test-verified`: a targeted test exercises the changed code path and passes.
+- `type-check-only`: only type-check / build passes. No test or repro for the fix.
+- `not-verified`: you didn't verify the fix end-to-end (e.g. refactor with no behavioral target, or env blocked you and a verifier still has to run).
+
+## Notes, concerns, deviations, findings, thoughts, feedback
+- <anything the planner needs to know>
+
+## Suggested follow-ups
+- <tasks the planner should consider publishing>
 
 ## Task id
 <task.id>
 ```
 
-The worker / verifier system prompt (loaded automatically when the subagent type is invoked) tells the subagent what to do with this content — including writing the handoff to `.orchestrate/handoffs/<task-id>.md` in its own worktree.
-
-## Subplanners: `claude-bg-wait`
+### Verifier template
 
 ```
-Bash(
-  command = "claude-bg-wait \"$(cat <workspace>/spawns/<task-id>.md)\""
-)
+You are a verifier in an orchestrated task. You do not communicate with any other agents. You produce one verdict handoff when done.
+
+Overall goal (context only; don't try to own it):
+
+<plan.goal>
+
+Your verifier task:
+
+<task.scopedGoal>
+
+You are verifying target task `<target.name>` (type: `<target.type>`) on branch `<target.branch>`.
+
+Target worktree path: `<target.worktreePath>`
+The target's code is already checked out in that worktree.
+
+Target scoped task (verbatim):
+
+<target.scopedGoal>
+
+Target acceptance criteria (verbatim):
+- <criterion 1>
+- <criterion 2>
+
+<target.verify recipe, if present>
+
+Verifier-specific acceptance criteria:
+- <your acceptance 1>
+- <your acceptance 2>
+
+Upstream handoffs (if any handed-off):
+
+### handoff: <dep-id>
+<verbatim body>
+
+Positioning on the target's code:
+
+The target's worktree is at the absolute path shown above. To verify against the actual delivered code, run commands using absolute paths or with `cd <target-worktree-path> && <command>` chained per Bash call.
+
+Bash cwd does NOT persist between calls in Claude Code (despite some doc text saying it does — empirical). Each Bash call resets to your verifier worktree. Patterns:
+
+- Absolute paths: `wc -c <target-worktree-path>/path/to/file.txt`
+- Chained per call: `cd <target-worktree-path> && pytest -xvs tests/`
+- One-shot heredoc: `cd <target-worktree-path> && check_1 && check_2 && check_3`
+
+For read-only single-file inspection across branches, `git show <target-branch>:<path>` also works.
+
+Avoid `git reset --hard <target-branch>` — destructive-action safety classifiers may block it, and you don't need to change branch refs to verify.
+
+Execution mandate:
+- Run the code. Reading the diff is not verification.
+- Reproduce each acceptance criterion by observable behavior: run the test suite and paste output; invoke the CLI with real inputs; start the service and hit the endpoint; start the UI (dev server), click through the flow, inspect DOM/localStorage/network; build/typecheck.
+- `## Verification` is the only structured signal the planner gets about your evidence. A planner that reads `live-ui-verified` and the underlying truth was `verifier-blocked` ships a broken fix.
+- When environment failures (port conflicts, missing creds, broken harness, network) prevent the verification, set `verifier-blocked`. Don't report `type-check-only` for a check you didn't run end-to-end; that disguises an env failure as a thin verification.
+- If you're tempted to write a verdict without running anything, set `verifier-blocked` and say why.
+- UI / interactive bugs: capture a screen recording of the repro or fix and mention the artifact path in your handoff.
+
+Branch discipline:
+- Commit verifier artifacts (repro scripts, audit notes, log captures if useful) to the branch already checked out for you. Do not push or open a PR.
+- Do NOT modify target source files.
+- Do NOT merge, rebase, or open a PR. The planner owns integration.
+
+Before your final turn, write your handoff to `.orchestrate/handoffs/<task.id>.md` in your verifier worktree (which is your default cwd), `git add` + `git commit -m "handoff: <task.id>"`.
+
+Use exactly this structure for the handoff file:
+
+## Verification
+<one of: live-ui-verified | unit-test-verified | type-check-only | verifier-blocked | verifier-failed>
+
+Pick the strongest claim your `## Execution` evidence supports:
+
+- `live-ui-verified`: you reproduced the bug live (real browser, real binary, real CLI) and confirmed the fix removes it. Required for UI or interactive bugs when the env permits.
+- `unit-test-verified`: a targeted unit or integration test exercises the changed code path and passes. No live confirmation.
+- `type-check-only`: only type-check / build passes. No tests for the fix itself. Pick this only when the change is typing-only or compile-only.
+- `verifier-blocked`: environment failures (port conflicts, missing creds, broken harness, network) prevented you from running the verification. The fix may be correct but you couldn't prove it. Use this rather than misrepresenting a thinner check.
+- `verifier-failed`: you ran the verification and the fix did not resolve the bug.
+
+## Target
+`<target.name>` on branch `<target.branch>`
+
+## Branch
+`<your actual branch name>` (or "(no branch)" if you committed nothing)
+
+## Execution
+- <command run> → <outcome>
+- <test suite> → <pass/fail counts>
+- <manual repro step> → <observed behavior>
+(list every meaningful thing you actually ran; this section is what distinguishes a real verification from pattern-matching)
+
+## Findings
+Per acceptance criterion:
+- [x] <criterion text>: <evidence> (met | not met | n/a)
+Other findings (severity-ordered):
+- (high) <finding>: evidence
+- (med) <finding>: evidence
+- (low) <finding>: evidence
+
+## Notes & suggestions
+- <anything the planner should know>
+
+## Task id
+<task.id>
 ```
 
-`claude-bg-wait` is bundled in this plugin's `bin/` directory. Claude Code prepends every installed plugin's `bin/` directory to PATH at session start, so the wrapper is callable as a bare command name — no `${CLAUDE_PLUGIN_ROOT}` prefix needed, no PATH symlink dance. It spawns `claude --bg <prompt>`, polls until the bg session is idle-stable, prints session logs to stdout, then `claude stop`s the session. The bg session is a fresh top-level Claude Code session — full Agent tool access (so it can recursively spawn its own workers + further subplanners).
-
-**The bg session's stdout from `claude logs` is noisy** (raw TUI output with ANSI escapes). Don't try to parse it for the handoff. Instead, the subplanner spawn prompt tells the subplanner to write its handoff to a file path you specify, and you `Read` that file after `claude-bg-wait` returns.
-
-### Subplanner spawn prompt template
-
-Write to `<workspace>/spawns/<task-id>.md` before invoking `claude-bg-wait`:
+### Subplanner template
 
 ```
 You are a subplanner for: <task.scopedGoal>
 
-Read `.claude/skills/orchestrate/SKILL.md` and follow it.
+Read `.claude/skills/orchestrate/SKILL.md` and follow it. The skill is bundled with the `orchestrate` plugin which is installed and available in your session.
 
-**You fully own this slice.** Your parent gave you a goal, path boundaries, and acceptance, not a sub-plan. Decide your own decomposition. If `scopedGoal` below includes hints about how to split the work, treat them as weak hints at most; you are authoritative on your subtree's structure.
+**You fully own this slice.** Your parent gave you a goal, path boundaries, and acceptance, not a sub-plan. Decide your own decomposition. If `scopedGoal` includes hints about how to split the work, treat them as weak hints; you are authoritative on your subtree's structure.
 
-**Recursion.** You are a planner: use workers for leaf-sized slices; add `subplanner` tasks when the slice still needs internal structure or merge/verify passes. No depth limit. Use judgment on count: one worker can carry a multi-file, multi-step slice. Default to fewer, broader workers; see `references/planner.md` "Planning rules" for the spawn-scope tradeoff.
+**Recursion.** You are a planner: use workers for leaf-sized slices; add `subplanner` tasks when the slice still needs internal structure (multiple workers + their own merges/verifies). No depth limit. Default to fewer, broader workers; see `references/planner.md` "Planning rules" for the spawn-scope tradeoff.
 
-**Child tasks.** Write child tasks as `plan.tasks[]` entries in your own plan.json. For code-editing children, propagate per the code discipline: no narrative comments. Comment only non-obvious *why*.
+**Child tasks.** Write child tasks as `plan.tasks[]` entries in your own `<workspace>/plan.json`.
 
-**Workspace convention.** Put your orchestrate workspace at `.orchestrate/<task.name>/` and set `plan.rootSlug = "<task.name>"`. Your cwd is the parent's cwd — you can see the parent's `.orchestrate/<parent-rootSlug>/` but should not modify it; carve out your own.
+**Workspace convention.** Your cwd is your own isolated worktree. Carve out your orchestrate workspace at `.orchestrate/<task.name>/` inside your worktree and set `plan.rootSlug = "<task.name>"`. Your spawned children get their own isolated worktrees at `<your-worktree>/.claude/worktrees/<sub-name>/` (planner's `<worktree-name>` arg to `claude-bg-wait`).
 
 Overall goal (parent's framing, context only):
 
@@ -122,73 +262,48 @@ Paths you must NOT modify (owned by siblings):
 <task.pathsForbidden>
 
 Acceptance criteria for your subtree:
-<task.acceptance>
+- <criterion 1>
+- <criterion 2>
 
-## Upstream handoffs
+Upstream handoffs (if task.dependsOn has entries with status: handed-off):
+
 ### handoff: <dep-id>
-<verbatim handoff body>
-(only if task.dependsOn has entries with status: handed-off; otherwise omit)
-
-## Handoff file path
-When you finish, write your aggregated handoff to: `<absolute-path-to-parent-workspace>/handoffs/<task.id>.md`
-
-This file path is in the parent planner's workspace, which is in your cwd. The parent reads from this exact path after you exit. Do not write to anywhere else for the handoff.
+<verbatim body>
 
 ## Root workspace path
+
 <absolute-path-to-root-workspace>
 
-Check `<root-workspace-path>/andon` before each spawn cycle in your reconcile loop. If the file exists, pause new spawns and wait until it's removed (see `references/planner.md` Phase 2 sweep step 0). One andon file at the root level pauses every planner in the tree; the operator can drop or remove it from any terminal.
+Check `<root-workspace-path>/andon` before each spawn cycle in your reconcile loop. If the file exists, pause new spawns and wait until removed (see `references/planner.md` Phase 2 sweep step 0). One andon file at the root pauses every planner in the tree.
+
+Before your final turn, write your aggregated handoff to `.orchestrate/handoffs/<task.id>.md` in your worktree (mkdir -p first), `git add` + `git commit -m "handoff: <task.id>"`. The parent reads this file at the worktree path the wrapper returns.
+
+Use the subplanner handoff structure documented in `references/planner.md` (Phase 3 — Subplanner). Don't end your turn until that file is on disk.
 
 ## Task id
 <task.id>
-
-Your **final action** is to write your handoff to the path above. Use the subplanner handoff structure documented in `references/planner.md` (Phase 3 — Subplanner). Don't end your turn until that file is on disk.
 ```
 
-The bg session reads this entire prompt, treats it as its initial user message, loads the orchestrate skill via the "Read .claude/skills/orchestrate/SKILL.md and follow it" instruction, and proceeds.
-
-## `startingRef` (worker-side switch)
-
-The Agent tool creates the worktree from current HEAD (the planner's branch). If a worker/verifier task declares `startingRef: <ref>`, the spawn prompt includes:
-
-```
-## Starting ref
-<ref>
-```
-
-The worker's subagent system prompt instructs it to run `git reset --hard <ref>` as its first action — repointing its branch's HEAD from the planner's HEAD to the desired ref. The branch name doesn't change; the content does.
-
-Subplanners don't go through this mechanism — they share the planner's cwd and HEAD. If a subplanner needs to start from a specific ref, its scopedGoal should say so and the subplanner can `git reset --hard` in its own worktree(s) when it spawns its workers.
-
-## `dependsOn` (gating + context relay)
-
-`dependsOn: [<task-id>, ...]` does two things:
-1. **Gates spawn**: a task with `dependsOn` cannot become ready until every listed task has `status: handed-off`.
-2. **Triggers context relay**: at spawn time, the planner pastes each listed task's handoff body verbatim into the downstream spawn prompt under `## Upstream handoffs`.
-
-Use `dependsOn` whenever a downstream task needs upstream context, even if Git-level ordering doesn't strictly require it. Workers can't read sibling worktrees at runtime.
-
-## Verifier auto-wiring
+## Verifier auto-wiring (planner-side)
 
 When the planner encounters a task with `type: verifier` and `verifies: <target-id>`:
+
 - **Implicit `dependsOn`**: target id is added to verifier's `dependsOn` at plan-load time.
-- **Implicit target-branch + worktree passthrough**: once target hands off, planner records `<target>.branch` and `<target>.worktreePath` from state.json and includes both in the verifier's spawn prompt under `## Target` and `## Target worktree path` blocks.
+- **Implicit target-branch + worktree passthrough**: once target hands off, planner records `<target>.branch` and `<target>.worktreePath` from state.json and includes both in the verifier's rendered spawn prompt under `## Target` and `## Target worktree path`.
 
-The verifier runs verification commands against the target's worktree using absolute paths or `cd <target-worktree-path> && <command>` per Bash call (cwd does NOT persist between Claude Code Bash invocations, despite some doc text — empirical). The target's worktree already has its code checked out; no `git reset` or `git checkout` needed. Verifier writes its handoff at `.orchestrate/handoffs/<task-id>.md` in its OWN worktree (the default cwd each call), which keeps the handoff on the verifier's branch. Avoids destructive-action classifier blocks entirely.
-
-**Don't set `startingRef` for verifiers.** Unlike workers (where `startingRef` triggers a `git reset --hard` of the worker's own branch), verifiers position themselves by `cd`-ing into the target's existing worktree. The `## Target` + `## Target worktree path` blocks in the spawn prompt are the signals a verifier needs.
+**Don't set `startingRef` for verifiers.** Workers reset their own branch from `startingRef`; verifiers just point at the target's existing worktree and run commands from there.
 
 ## State persistence per task
 
-After each spawn returns, the planner updates `state.json` for that task with:
+After each spawn returns, the planner updates `state.json`:
 
 ```json
 {
   "id": "<task-id>",
   "status": "handed-off" | "error" | "partial" | "blocked" | "cancelled",
-  "agentId": "<id from result, for workers/verifiers; for subplanners use bg session id>",
-  "worktreePath": "<path from result, for workers/verifiers; null for subplanners>",
-  "branch": "<worktreeBranch from result, for workers/verifiers; from handoff '## Branch' line for subplanners>",
+  "agentId": "<sessionId from claude-bg-wait>",
+  "worktreePath": "<repo>/.claude/worktrees/<worktree-name>",
+  "branch": "worktree-<worktree-name>",
   "attempts": <incremented>,
   "startedAt": "<iso>",
   "finishedAt": "<iso>",
