@@ -17,7 +17,6 @@
         "name": "George Zhang"
       },
       "license": "MIT",
-      "homepage": "https://github.com/georgezhangtj/claude-orchestrate",
       "source": "./plugins/orchestrate"
     }
   ]

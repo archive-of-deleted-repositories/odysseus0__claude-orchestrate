@@ -1,0 +1,11 @@
+# Claude Code worktrees (created on-demand by Agent tool / claude --bg --worktree;
+# each is its own checked-out copy of the repo, not part of plugin content).
+.claude/worktrees/
+
+# Orchestration scaffolding (plan.json, state.json, handoffs/, spawns/, attention.log).
+# Created at runtime when orchestrate is dogfooded on the plugin's own repo. Not
+# part of plugin content; do not ship in the public release.
+.orchestrate/
+
+# macOS
+.DS_Store
