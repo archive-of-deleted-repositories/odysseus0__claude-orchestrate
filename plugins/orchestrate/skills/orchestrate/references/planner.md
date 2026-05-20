@@ -126,9 +126,15 @@ Your turn IS the heartbeat. There is no subprocess.
 5. **Spawn ready tasks (uniform substrate).** Every task type uses the same spawn mechanism:
    - Pick a worktree name: `<rootSlug>-<task-id>` (unique per orchestrate run).
    - Render the appropriate spawn-prompt template (worker, verifier, or subplanner — see `references/spawning.md` for each verbatim).
-   - Write the rendered prompt to `<workspace>/spawns/<task-id>.md`.
+   - Write the rendered prompt to `<workspace>/spawns/<task-id>.md` (forensic record on disk).
    - Invoke: `Bash(command: "claude-bg-wait \"<worktree-name>\" \"$(cat <workspace>/spawns/<task-id>.md)\"")`.
    - Emit multiple `Bash` calls in a single assistant message to parallelize ready tasks.
+
+   **Note on permission modes.** This wrapper pattern (`$(cat <spawn-file>)` into `claude --bg`) is opaque to safety classifiers — they see "Bash invocation references a file" without the prompt content visible inline. In **auto mode**, the classifier may block such invocations with "unverifiable agent-inferred input." Two ways to handle this:
+   - **Recommended for long autonomous runs**: invoke the root planner from a `claude --dangerously-skip-permissions` session (the `ccc` alias). The orchestrate plan was approved by the operator at Phase 1; workers act under that mandate. No classifier friction; no per-spawn token tax.
+   - **If auto-mode is required**: replace the `$(cat <file>)` substitution with a heredoc that inlines the prompt in the Bash command itself. The classifier sees the content inline, no file opacity. Costs longer Bash commands but no extra tool calls.
+
+   Avoid the seductive-but-wasteful `Write → Read → Bash($(cat))` pattern (one extra Read tool call PLUS the prompt body duplicated in the transcript). The two options above are both cheaper.
 
    `claude-bg-wait` spawns `claude --bg --worktree <name> "<prompt>"`, polls the bg session via `claude agents --json` until idle-stable, prints session logs to stdout (diagnostic only — handoff is read from disk), then `claude stop`s the session. The worktree at `<repo>/.claude/worktrees/<name>/` persists; the planner reads the handoff from there. The wrapper is on PATH because Claude Code adds every installed plugin's `bin/` directory to PATH at session start.
 

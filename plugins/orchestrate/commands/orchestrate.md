@@ -15,6 +15,8 @@ Loop hygiene:
 - On any task transitioning to `error`: read the synthetic failure handoff at `<workspace>/handoffs/<task>-failure.md`, decide retry / split / escalate / drop, then continue. Each retry costs another spawn — after 2 attempts on the same task, prefer abandon (drop from plan.json, replan around it) over a 3rd attempt unless you have specific evidence the next retry will succeed.
 - Don't end your turn while this workspace has non-terminal tasks.
 
+If you (the user reading this) are about to start a long orchestrate run, consider invoking Claude Code with `--dangerously-skip-permissions` (the `ccc` alias). Auto-mode's safety classifier doesn't see the content of file-based spawn prompts (`$(cat <spawn-file>)`) and may block individual `Bash(claude-bg-wait ...)` invocations as "unverifiable agent-inferred input" — disruptive for long autonomous runs. You already approved the plan at Phase 1; the workers run under that mandate.
+
 After publishing the plan, surface this to the user verbatim so they know the pause-control:
 
 ```
