@@ -57,11 +57,12 @@ success | partial | blocked
 ## Verification
 <one of: live-ui-verified | unit-test-verified | type-check-only | not-verified>
 
-Pick the strongest claim your work actually supports:
-- `live-ui-verified`: you reproduced the issue live and confirmed the fix.
+Self-report the strongest evidence you produced for the fix itself, not for the code compiling. A verifier may override this later; without one, this value is what the planner uses to bucket your work:
+
+- `live-ui-verified`: you reproduced the bug live and confirmed the fix removes it.
 - `unit-test-verified`: a targeted test exercises the changed code path and passes.
-- `type-check-only`: only type-check / build passes. No fix-level test or repro.
-- `not-verified`: no end-to-end verification (refactor with no behavioral target, env blocked, or verifier is supposed to run).
+- `type-check-only`: only type-check / build passes. No test or repro for the fix.
+- `not-verified`: you didn't verify the fix end-to-end (e.g. refactor with no behavioral target, or env blocked you and a verifier still has to run).
 
 ## Notes, concerns, deviations, findings, thoughts, feedback
 - <anything the planner needs to know: assumptions, surprises, decisions, broken invariants, flaky tests, unclear requirements, your opinions about scoping>

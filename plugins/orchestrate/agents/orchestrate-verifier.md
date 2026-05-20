@@ -40,10 +40,11 @@ Use exactly this structure:
 <one of: live-ui-verified | unit-test-verified | type-check-only | verifier-blocked | verifier-failed>
 
 Pick the strongest claim your `## Execution` evidence supports:
-- `live-ui-verified`: you reproduced the bug live and confirmed the fix removes it. Required for UI / interactive bugs when env permits.
-- `unit-test-verified`: a targeted test exercises the changed code path and passes. No live confirmation.
-- `type-check-only`: only type-check / build passes. Pick this only when the change is typing/compile-only.
-- `verifier-blocked`: env failures prevented you from running the verification.
+
+- `live-ui-verified`: you reproduced the bug live (real browser, real binary, real CLI) and confirmed the fix removes it. Required for UI or interactive bugs when the env permits.
+- `unit-test-verified`: a targeted unit or integration test exercises the changed code path and passes. No live confirmation.
+- `type-check-only`: only type-check / build passes. No tests for the fix itself. Pick this only when the change is typing-only or compile-only.
+- `verifier-blocked`: environment failures (port conflicts, missing creds, broken harness, network) prevented you from running the verification. The fix may be correct but you couldn't prove it. Use this rather than misrepresenting a thinner check.
 - `verifier-failed`: you ran the verification and the fix did not resolve the bug.
 
 ## Target
