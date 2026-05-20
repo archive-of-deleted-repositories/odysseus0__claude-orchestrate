@@ -1,0 +1,93 @@
+#!/bin/bash
+# claude-bg-wait: synchronous wrapper around `claude --bg`.
+#
+# Usage:   claude-bg-wait <prompt>
+# Returns: prints the bg session's final logs to stdout, exits 0 on success.
+# Errors:  prints diagnostics to stderr, exits non-zero.
+#
+# Spawns a daemon-supervised background Claude Code session with the given
+# prompt, polls `claude agents --json` until status==idle for N consecutive
+# checks (to avoid mid-turn idle blips), prints the session's final output
+# via `claude logs`, then `claude stop`s the session.
+#
+# Built for the orchestrate plugin's subplanner spawn. The bg session is a
+# fresh top-level Claude Code process with full Agent-tool access, which is
+# what enables recursive subplanner → worker spawning that ordinary
+# subagents cannot do.
+
+set -euo pipefail
+
+if [ $# -lt 1 ]; then
+  echo "usage: claude-bg-wait <prompt>" >&2
+  exit 2
+fi
+
+prompt="$1"
+poll_interval_sec="${CLAUDE_BG_WAIT_POLL_INTERVAL:-5}"
+stable_checks_required="${CLAUDE_BG_WAIT_STABLE_CHECKS:-3}"
+max_wait_sec="${CLAUDE_BG_WAIT_MAX_SEC:-3600}"
+
+# --- Spawn ---
+spawn_out=$(claude --bg "$prompt" 2>&1) || {
+  echo "claude-bg-wait: claude --bg failed:" >&2
+  echo "$spawn_out" >&2
+  exit 1
+}
+
+# Parse agent id. Spawn output starts with "backgrounded · <hex>".
+# Strip ANSI color escapes first — `claude --bg` colorizes the id even when
+# stdout is not a TTY (verified empirically).
+clean_spawn=$(printf '%s' "$spawn_out" | sed $'s/\033\\[[0-9;]*[a-zA-Z]//g')
+agent_id=$(printf '%s' "$clean_spawn" | grep -oE 'backgrounded · [a-f0-9]+' | head -1 | awk '{print $3}')
+
+if [ -z "$agent_id" ]; then
+  echo "claude-bg-wait: could not parse agent_id from spawn output:" >&2
+  echo "$spawn_out" >&2
+  exit 1
+fi
+
+echo "claude-bg-wait: spawned agent $agent_id; polling for idle (interval=${poll_interval_sec}s, stable=${stable_checks_required}, timeout=${max_wait_sec}s)..." >&2
+
+# --- Poll ---
+deadline=$(( $(date +%s) + max_wait_sec ))
+stable_count=0
+last_status=""
+
+while [ $(date +%s) -lt $deadline ]; do
+  status=$(claude agents --json 2>/dev/null | jq -r ".[] | select(.sessionId|startswith(\"$agent_id\")) | .status" 2>/dev/null || echo "unknown")
+
+  if [ -z "$status" ] || [ "$status" = "null" ]; then
+    # Session disappeared from the agents list — it may have exited
+    echo "claude-bg-wait: session $agent_id no longer listed; assuming exit" >&2
+    break
+  fi
+
+  if [ "$status" != "$last_status" ]; then
+    echo "claude-bg-wait: status -> $status" >&2
+    last_status="$status"
+  fi
+
+  if [ "$status" = "idle" ]; then
+    stable_count=$((stable_count + 1))
+    if [ $stable_count -ge $stable_checks_required ]; then
+      echo "claude-bg-wait: idle stable; reading logs" >&2
+      break
+    fi
+  else
+    stable_count=0
+  fi
+
+  sleep "$poll_interval_sec"
+done
+
+if [ $stable_count -lt $stable_checks_required ] && [ "$status" != "null" ] && [ -n "$status" ]; then
+  echo "claude-bg-wait: timed out waiting for idle (last status=$status, agent=$agent_id)" >&2
+  claude stop "$agent_id" >/dev/null 2>&1 || true
+  exit 124
+fi
+
+# --- Read final output ---
+claude logs "$agent_id"
+
+# --- Cleanup ---
+claude stop "$agent_id" >/dev/null 2>&1 || true

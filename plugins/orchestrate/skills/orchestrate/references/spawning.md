@@ -1,30 +1,27 @@
 # Spawning
 
-The contract between planner and Agent tool invocation. Used when the planner spawns workers, verifiers, or subplanners.
+The contracts between planner and the three spawn substrates (Agent tool for workers/verifiers; `claude-bg-wait` for subplanners).
 
-## Agent tool call shape
+## Workers and verifiers: Agent tool
 
 ```
 Agent(
-  subagent_type = "orchestrate:orchestrate-worker" | "orchestrate:orchestrate-verifier" | "orchestrate:orchestrate-planner",
+  subagent_type = "orchestrate:orchestrate-worker" | "orchestrate:orchestrate-verifier",
   isolation     = "worktree",
-  description   = "<rootSlug>/<task-id>",     # appears in spinner / logs
+  description   = "<rootSlug>/<task-id>",      # appears in spinner / logs
   prompt        = <rendered spawn prompt>,
 )
 ```
 
-Multiple ready tasks: emit multiple `Agent` tool calls in a single assistant message. They run in parallel — verified empirically (two ~10s concurrent spawns in spike tests).
+Multiple ready tasks: emit multiple `Agent` tool calls in a single assistant message. They run in parallel.
 
-## Worktree behavior (Claude Code-managed)
+### Agent-tool worktree behavior
 
 `isolation: "worktree"` causes Claude Code to:
-
 - Create a worktree at `~/.claude/worktrees/agent-<id>/`.
 - Set the subagent's `pwd` to that worktree.
 - Auto-name the branch `worktree-agent-<id>`.
-- On agent exit:
-  - If the agent made zero changes, auto-clean the worktree.
-  - Otherwise, persist it and return metadata.
+- On agent exit: persist worktree + branch if changes were made; auto-clean if not.
 
 Result format (after the prose):
 
@@ -36,49 +33,9 @@ worktreeBranch: worktree-agent-<id>
 
 Parse these lines. Persist `agentId`, `worktreePath`, `worktreeBranch` to state.json for the task.
 
-The auto-generated branch name is what it is; **don't ask workers to rename branches**. Cursor uses `orch/<rootSlug>/<task>` because the SDK leaves the branch unset; Claude Code returns the actual branch unambiguously, so naming convention is unnecessary.
-
-## `startingRef` (worker-side switch)
-
-The Agent tool creates the worktree from current HEAD (the planner's branch). If a task declares `startingRef: <ref>`, the spawn prompt includes:
+### Worker/verifier spawn prompt template
 
 ```
-## Starting ref
-<ref>
-```
-
-The worker's subagent system prompt instructs it to run `git reset --hard <ref>` as its first action — repointing its branch's HEAD from the planner's HEAD to the desired ref. The branch name doesn't change; the content does.
-
-This preserves real parallelism for dependency chains:
-
-- B and C both depend on A. Once A hands off, planner can spawn B and C in parallel — each with `startingRef = A.branch`. Both worktrees `git reset --hard A.branch`, both work in parallel.
-- No planner-side `git merge` required before spawn.
-
-## `dependsOn` (gating + context relay)
-
-`dependsOn: [<task-id>, ...]` does two things:
-
-1. **Gates spawn**: a task with `dependsOn` cannot become ready until every listed task has `status: handed-off`.
-2. **Triggers context relay**: at spawn time, the planner pastes each listed task's handoff body verbatim into the downstream spawn prompt under `## Upstream handoffs`. See `handoffs.md` → "Upstream handoffs in downstream prompts".
-
-Use `dependsOn` whenever a downstream task needs upstream context, even if Git-level ordering doesn't strictly require it. Workers can't read sibling worktrees at runtime.
-
-## Verifier auto-wiring
-
-When the planner encounters a task with `type: verifier` and `verifies: <target-id>`:
-
-- **Implicit `dependsOn`**: target id is added to verifier's `dependsOn` at plan-load time (or at first spawn-readiness check). Planner doesn't require the user to wire this manually.
-- **Implicit `startingRef`**: once target hands off, planner sets verifier's `startingRef` to `<target>.branch` from state.json before spawning. (If the target's branch is unknown at plan time, this happens at sweep time.)
-
-The verifier then `git reset --hard <target-branch>` as its first action and verifies on the actual delivered code.
-
-## Spawn prompt template
-
-The canonical shape the planner renders for each task:
-
-```
-<role-specific header>
-
 ## Overall goal
 <plan.goal verbatim — for context, not ownership>
 
@@ -94,17 +51,16 @@ The canonical shape the planner renders for each task:
 ## Acceptance criteria
 - <criterion 1>
 - <criterion 2>
-...
 
 ## Verify recipe
 <task.verify markdown, if present>
 
 ## Starting ref
-<task.startingRef, only if present>
+<task.startingRef, only if present — worker `git reset --hard`s to this as first action>
 
 ## Measurements
 - <m.name>: `<m.command>`
-(only if task.measurements is non-empty; otherwise omit)
+(only if task.measurements is non-empty; otherwise omit the section)
 
 ## Upstream handoffs
 ### handoff: <dep-id>
@@ -118,19 +74,100 @@ The canonical shape the planner renders for each task:
 <task.id>
 ```
 
-### Role-specific headers
+The worker / verifier system prompt (loaded automatically when the subagent type is invoked) tells the subagent what to do with this content — including writing the handoff to `.orchestrate/handoffs/<task-id>.md` in its own worktree.
 
-- **Worker**: "You are a worker in an orchestrated task. You do not communicate with any other agents. You produce one handoff when done."
-- **Verifier**: "You are a verifier for target task `<target-id>` on branch `<target-branch>`. You do not communicate with any other agents. You produce one verdict handoff when done."
-- **Subplanner**: "You are a subplanner for: `<scopedGoal>`. You fully own this slice. Load the orchestrate skill (`orchestrate:orchestrate`) and read `references/planner.md`. Set `plan.rootSlug = <suggested-sub-slug>`. Aggregate child handoffs upward."
+## Subplanners: `claude-bg-wait`
 
-Each role's subagent system prompt — bundled with the plugin as `agents/orchestrate-<role>.md` and addressable as `orchestrate:orchestrate-<role>` — contains the operational guidance for what to do with this prompt: handoff structure, exit discipline, etc.
+```
+Bash(
+  command = "claude-bg-wait \"$(cat <workspace>/spawns/<task-id>.md)\""
+)
+```
 
-## Handoff file location
+`claude-bg-wait` is bundled in this plugin's `scripts/` directory. It spawns `claude --bg <prompt>`, polls until the bg session is idle-stable, prints session logs to stdout, then `claude stop`s the session. The bg session is a fresh top-level Claude Code session — full Agent tool access (so it can recursively spawn its own workers + further subplanners).
 
-The worker writes its handoff to `.orchestrate/handoffs/<task-id>.md` **inside its own worktree**. The central workspace path `.orchestrate/<rootSlug>/handoffs/` does NOT exist in the worker's worktree (the worker's worktree starts from HEAD with no `.orchestrate/<rootSlug>/` directory — or if there is one, it's the planner's `.orchestrate/`, which the worker should not touch).
+**The bg session's stdout from `claude logs` is noisy** (raw TUI output with ANSI escapes). Don't try to parse it for the handoff. Instead, the subplanner spawn prompt tells the subplanner to write its handoff to a file path you specify, and you `Read` that file after `claude-bg-wait` returns.
 
-Convention: the worker writes to `.orchestrate/handoffs/<task-id>.md` (a top-level handoffs dir, no rootSlug nesting) inside its worktree. The planner reads from that path and copies to the central `<workspace>/handoffs/<task-id>.md`.
+### Subplanner spawn prompt template
+
+Write to `<workspace>/spawns/<task-id>.md` before invoking `claude-bg-wait`:
+
+```
+You are a subplanner for: <task.scopedGoal>
+
+Read `.claude/skills/orchestrate/SKILL.md` and follow it.
+
+**You fully own this slice.** Your parent gave you a goal, path boundaries, and acceptance, not a sub-plan. Decide your own decomposition. If `scopedGoal` below includes hints about how to split the work, treat them as weak hints at most; you are authoritative on your subtree's structure.
+
+**Recursion.** You are a planner: use workers for leaf-sized slices; add `subplanner` tasks when the slice still needs internal structure or merge/verify passes. No depth limit. Use judgment on count: one worker can carry a multi-file, multi-step slice. Default to fewer, broader workers; see `references/planner.md` "Planning rules" for the spawn-scope tradeoff.
+
+**Child tasks.** Write child tasks as `plan.tasks[]` entries in your own plan.json. For code-editing children, propagate per the code discipline: no narrative comments. Comment only non-obvious *why*.
+
+**Workspace convention.** Put your orchestrate workspace at `.orchestrate/<task.name>/` and set `plan.rootSlug = "<task.name>"`. Your cwd is the parent's cwd — you can see the parent's `.orchestrate/<parent-rootSlug>/` but should not modify it; carve out your own.
+
+Overall goal (parent's framing, context only):
+
+<plan.goal>
+
+Your scoped sub-goal:
+
+<task.scopedGoal>
+
+Paths you may MODIFY (read any file in the repo):
+<task.pathsAllowed>
+
+Paths you must NOT modify (owned by siblings):
+<task.pathsForbidden>
+
+Acceptance criteria for your subtree:
+<task.acceptance>
+
+## Upstream handoffs
+### handoff: <dep-id>
+<verbatim handoff body>
+(only if task.dependsOn has entries with status: handed-off; otherwise omit)
+
+## Handoff file path
+When you finish, write your aggregated handoff to: `<absolute-path-to-parent-workspace>/handoffs/<task.id>.md`
+
+This file path is in the parent planner's workspace, which is in your cwd. The parent reads from this exact path after you exit. Do not write to anywhere else for the handoff.
+
+## Task id
+<task.id>
+
+Your **final action** is to write your handoff to the path above. Use the subplanner handoff structure documented in `references/planner.md` (Phase 3 — Subplanner). Don't end your turn until that file is on disk.
+```
+
+The bg session reads this entire prompt, treats it as its initial user message, loads the orchestrate skill via the "Read .claude/skills/orchestrate/SKILL.md and follow it" instruction, and proceeds.
+
+## `startingRef` (worker-side switch)
+
+The Agent tool creates the worktree from current HEAD (the planner's branch). If a worker/verifier task declares `startingRef: <ref>`, the spawn prompt includes:
+
+```
+## Starting ref
+<ref>
+```
+
+The worker's subagent system prompt instructs it to run `git reset --hard <ref>` as its first action — repointing its branch's HEAD from the planner's HEAD to the desired ref. The branch name doesn't change; the content does.
+
+Subplanners don't go through this mechanism — they share the planner's cwd and HEAD. If a subplanner needs to start from a specific ref, its scopedGoal should say so and the subplanner can `git reset --hard` in its own worktree(s) when it spawns its workers.
+
+## `dependsOn` (gating + context relay)
+
+`dependsOn: [<task-id>, ...]` does two things:
+1. **Gates spawn**: a task with `dependsOn` cannot become ready until every listed task has `status: handed-off`.
+2. **Triggers context relay**: at spawn time, the planner pastes each listed task's handoff body verbatim into the downstream spawn prompt under `## Upstream handoffs`.
+
+Use `dependsOn` whenever a downstream task needs upstream context, even if Git-level ordering doesn't strictly require it. Workers can't read sibling worktrees at runtime.
+
+## Verifier auto-wiring
+
+When the planner encounters a task with `type: verifier` and `verifies: <target-id>`:
+- **Implicit `dependsOn`**: target id is added to verifier's `dependsOn` at plan-load time.
+- **Implicit `startingRef`**: once target hands off, planner sets verifier's `startingRef` to `<target>.branch` from state.json before spawning.
+
+The verifier then `git reset --hard <target-branch>` as its first action and verifies on the actual delivered code.
 
 ## State persistence per task
 
@@ -140,9 +177,9 @@ After each spawn returns, the planner updates `state.json` for that task with:
 {
   "id": "<task-id>",
   "status": "handed-off" | "error" | "partial" | "blocked" | "cancelled",
-  "agentId": "<id from result>",
-  "worktreePath": "<path from result>",
-  "branch": "<worktreeBranch from result>",
+  "agentId": "<id from result, for workers/verifiers; for subplanners use bg session id>",
+  "worktreePath": "<path from result, for workers/verifiers; null for subplanners>",
+  "branch": "<worktreeBranch from result, for workers/verifiers; from handoff '## Branch' line for subplanners>",
   "attempts": <incremented>,
   "startedAt": "<iso>",
   "finishedAt": "<iso>",
@@ -154,12 +191,3 @@ After each spawn returns, the planner updates `state.json` for that task with:
 ```
 
 For verifiers, also update the **target task's** state row with the verifier's `verification` value (overrides any worker self-report).
-
-## Quality floor
-
-The worker's subagent system prompt enforces:
-- No placeholder TODOs or `not implemented` throws.
-- No narrative comments (comment only non-obvious *why*).
-- For UI / interactive bugs: capture artifacts and reference paths in the handoff.
-
-Planner doesn't need to repeat these in every spawn prompt — the worker's role agent already says them.

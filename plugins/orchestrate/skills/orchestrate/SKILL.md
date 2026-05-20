@@ -1,62 +1,46 @@
 ---
 name: orchestrate
-description: "Use only when the user explicitly types `/orchestrate <goal>` to decompose a large task, spawn a tree of parallel worker/subplanner/verifier subagents via Claude Code's Agent tool, and collect structured handoffs. Do not invoke autonomously."
+description: "Use only when the user explicitly types `/orchestrate:orchestrate <goal>` to decompose a large task, spawn a tree of parallel worker/subplanner/verifier subagents, and collect structured handoffs. Do not invoke autonomously."
 ---
 
 # Orchestrate
 
-An explicit `/orchestrate <goal>` fans out a large task across parallel Claude Code subagents running in isolated git worktrees. Workers don't talk to each other; they talk up through structured handoff files. The spawn/wait/handoff loop runs inside the planner's own session — no subprocess.
+An explicit `/orchestrate:orchestrate <goal>` fans out a large task across parallel Claude Code subagents running in isolated git worktrees. Workers don't talk to each other; they talk up through structured handoffs. The spawn, wait, and handoff loop lives in the planner's own turn. The planner writes `plan.json`, drives the loop, reads handoffs to decide what comes next. Long-running agent loops drift; a script with a JSON state file keeps its footing — in Claude Code the "script" is the planner's structured procedure in `references/planner.md`.
 
-Adapted from Cursor's `/orchestrate` skill ([cursor/plugins/orchestrate](https://github.com/cursor/plugins/tree/main/orchestrate)). Key differences from Cursor's design:
+Adapted from Cursor's `/orchestrate` skill ([cursor/plugins/orchestrate](https://github.com/cursor/plugins/tree/main/orchestrate)). Substrate differences:
 
-- No dispatcher; the Claude Code session is local, so it directly becomes the planner.
-- No `@cursor/sdk` and no cloud VMs; workers spawn via the `Agent` tool with `isolation: "worktree"`, which manages worktrees at `~/.claude/worktrees/agent-<id>/`.
-- No subprocess heartbeat (`bun cli.ts run`); the planner's own turn drives the reconcile loop.
-- No Slack mirroring or Andon polling; the user is in-session and Ctrl-C is the emergency stop.
-
-Workspace layout (after kickoff):
-
-```
-.orchestrate/<rootSlug>/
-├── plan.json          (planner-authored task graph)
-├── state.json         (planner-authored per-task state)
-├── handoffs/          (copied from worker worktrees; canonical history)
-└── attention.log      (drift signals, surfaced to user live)
-```
-
-Worker worktrees live at `~/.claude/worktrees/agent-<id>/` (Claude Code-managed).
+- No dispatcher. The Claude Code session is local; it IS the root planner.
+- Workers/verifiers spawn via Claude Code's `Agent` tool with `isolation: "worktree"` (in-process, fresh subagent session, isolated worktree at `~/.claude/worktrees/agent-<id>/`).
+- Subplanners spawn via `claude --bg` (daemon-supervised top-level session, full Agent tool access — required for the subplanner to itself spawn workers). The `claude-bg-wait` wrapper script (bundled in this plugin's `scripts/`) provides a synchronous interface.
+- No Slack, no Andon (user is in-session; Ctrl-C is the emergency stop).
+- No subprocess heartbeat; the planner's own turn drives the loop.
 
 ## Core principles
 
 These rules make the tree self-converging without global coordination.
 
-1. **Planners own scopes and publish tasks. They do no coding.** Writing `plan.json`, reading handoffs, deciding what's next are planner work. Editing files, running `git merge`, fixing conflicts inline are not. If a planner feels the urge to code, it publishes a task for a worker instead.
-2. **Planners don't know who picks up their tasks.** The `Agent` tool routes each task to a subagent (a worker, verifier, or subplanner).
+1. **Planners own scopes and publish tasks. They do no coding.** Writing `plan.json`, reading handoffs, and deciding what's next are planner work. Editing files, running `git merge`, and fixing conflicts inline are not. If a planner feels the urge to code, it publishes a task for a worker instead.
+2. **Planners don't know who picks up their tasks.** Routing each task to a fresh subagent (worker/verifier via Agent tool) or a fresh top-level session (subplanner via claude-bg-wait) is mechanical. The planner's mental model stays at the task level.
 3. **Workers are isolated.** One task, one worktree, no channel to any other agent. One handoff when done.
-4. **Subplanners are recursive planners.** A planner publishes a "subplan this slice" task; the subplanner fully owns that slice and hands back an aggregated handoff.
-5. **Continuous motion via handoffs.** A planner that thought it was done can still receive a late handoff and replan.
+4. **Subplanners are recursive planners.** A planner publishes a "subplan this slice" task; the subplanner fully owns that slice and hands back an aggregated handoff. Subplanners can spawn their own subplanners — no depth limit.
+5. **Continuous motion via handoffs.** A planner that thought it was done can receive a late handoff and replan. No "finished" state until the planner decides to stop publishing.
 6. **Propagation, not synchronization.** No cross-talk between siblings. No shared state between levels. Each level sees only its children's handoffs.
 
 ## Node types
 
-| Node           | Runs the loop? | Scope                            | Output                                 |
-| -------------- | -------------- | -------------------------------- | -------------------------------------- |
-| Root planner   | yes            | Entire user goal                 | User-facing summary                    |
-| Subplanner (↻) | yes (recursive)| One slice of parent's scope      | Handoff to parent                      |
-| Worker         | no             | One concrete task                | Handoff to spawning planner            |
-| Verifier       | no             | One target's acceptance criteria | Verdict handoff to spawning planner    |
-| Git            | n/a            | Shared medium                    | Branches (code) + handoffs/ (meaning)  |
+| Node           | Spawn substrate | Scope                            | Output                                  |
+| -------------- | --------------- | -------------------------------- | --------------------------------------- |
+| Root planner   | `/orchestrate:orchestrate <goal>` slash command (user-initiated) | Entire user goal | User-facing summary |
+| Subplanner (↻) | `Bash(claude-bg-wait "...")` (daemon-supervised top-level session) | One slice of parent's scope | Handoff file the parent reads |
+| Worker         | `Agent(subagent_type: "orchestrate:orchestrate-worker", isolation: "worktree")` | One concrete task | Handoff file in its worktree |
+| Verifier       | `Agent(subagent_type: "orchestrate:orchestrate-verifier", isolation: "worktree")` | One target's acceptance criteria | Verdict handoff file in its worktree |
+| Git            | n/a             | Shared medium                    | Branches (code) + handoffs/ (meaning)   |
 
 ## What to read next
 
-Two roles. Read your role's reference and skip the other.
+Read `references/planner.md` — the full operating manual for root and subplanners. It is the load-bearing read.
 
-- **Planner (root or sub).** You were spawned via the `/orchestrate:orchestrate` slash command (root) or via an `Agent` tool call with `subagent_type: "orchestrate:orchestrate-planner"` and a scoped goal (sub). Read `references/planner.md`. It is the load-bearing read.
-- **Worker / Verifier.** You were spawned via Agent tool with `subagent_type: "orchestrate:orchestrate-worker"` or `orchestrate:orchestrate-verifier`. Your spawn prompt is self-contained; you don't need this skill. (Your subagent system prompt — this plugin's `agents/orchestrate-worker.md` or `agents/orchestrate-verifier.md` — already contains the operational guidance.)
-
-References:
-
-- `references/planner.md` — operating manual for planners (root and sub).
+Other references:
 - `references/handoffs.md` — handoff schemas, synthetic failures, merges-as-tasks, upstream context relay.
-- `references/spawning.md` — spawn prompt contract, branch naming, startingRef + dependsOn semantics, verifier auto-wiring.
+- `references/spawning.md` — spawn-prompt contracts for workers/verifiers/subplanners, including the subplanner template you render and pass to `claude-bg-wait`.
 - `schemas/plan.schema.json` + `schemas/state.schema.json` — task graph and state row schemas.
