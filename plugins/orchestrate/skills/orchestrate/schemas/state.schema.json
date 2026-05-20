@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OrchestrateState",
+  "description": "Per-task state for /orchestrate. Written by the planner at <workspace>/state.json after each spawn and handoff. Adapted from Cursor's state.schema.json minus Slack/cloud fields.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["rootSlug", "tasks"],
+  "properties": {
+    "rootSlug": {
+      "type": "string",
+      "description": "Echoes plan.rootSlug."
+    },
+    "attention": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Operator-visible drift entries. Append-only; also streamed to user during ticks."
+    },
+    "tasks": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/TaskState" }
+    }
+  },
+  "$defs": {
+    "TaskState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "type", "status"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "type": { "enum": ["worker", "subplanner", "verifier"] },
+        "status": {
+          "enum": ["pending", "running", "handed-off", "partial", "blocked", "error", "cancelled", "pruned"]
+        },
+        "adHoc": {
+          "type": "boolean",
+          "default": false,
+          "description": "True if spawned outside plan.tasks (operator-injected). Not auto-spawned by reconcile loop."
+        },
+        "agentId": {
+          "type": ["string", "null"],
+          "description": "Agent tool's returned agentId. Used for lineage (parentAgentId) and SendMessage."
+        },
+        "parentAgentId": {
+          "type": ["string", "null"],
+          "description": "Spawning planner's agentId. For subplanner trees."
+        },
+        "worktreePath": {
+          "type": ["string", "null"],
+          "description": "Absolute path to the worker's worktree, returned by Agent tool with isolation=worktree."
+        },
+        "branch": {
+          "type": ["string", "null"],
+          "description": "Worker's actual branch name. Returned by Agent tool as worktreeBranch."
+        },
+        "startingRef": {
+          "type": ["string", "null"],
+          "description": "The ref the worker reset to before working. Set from plan.json or auto-set for verifiers."
+        },
+        "dependsOn": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "attempts": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        },
+        "startedAt": { "type": ["string", "null"], "format": "date-time" },
+        "lastUpdate": { "type": ["string", "null"], "format": "date-time" },
+        "finishedAt": { "type": ["string", "null"], "format": "date-time" },
+        "verification": {
+          "type": ["string", "null"],
+          "enum": [
+            "live-ui-verified",
+            "unit-test-verified",
+            "type-check-only",
+            "verifier-blocked",
+            "verifier-failed",
+            "not-verified",
+            null
+          ],
+          "description": "Verification verdict on this task. For workers/subplanners: self-reported. For verifiers' targets: written by planner from verifier's handoff (overrides self-report)."
+        },
+        "failureMode": {
+          "type": ["string", "null"],
+          "enum": [
+            "tool-error",
+            "network-drop",
+            "context-limit",
+            "finished-no-handoff",
+            "unknown",
+            "orphaned",
+            null
+          ],
+          "description": "Set when status=error. Drives retry policy in references/handoffs.md."
+        },
+        "handoffPath": {
+          "type": ["string", "null"],
+          "description": "Relative path from <workspace>/ to the central handoff copy."
+        },
+        "note": {
+          "type": ["string", "null"],
+          "description": "Short operator-readable note (e.g. 'cancelled by operator', 'session interrupted')."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "name": "claude-orchestrate",
+  "owner": {
+    "name": "George Zhang"
+  },
+  "metadata": {
+    "description": "Multi-agent orchestration for Claude Code — decompose a large goal into a tree of parallel worker / verifier / subplanner subagents, drive a reconcile loop, collect structured handoffs. Adapted from Cursor's /orchestrate.",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "orchestrate",
+      "description": "Decompose a large goal into a tree of parallel workers running in isolated git worktrees, collect typed handoffs, replan, repeat until terminal. Idiomatic Claude Code realization of Cursor /orchestrate.",
+      "version": "0.1.0",
+      "author": {
+        "name": "George Zhang"
+      },
+      "license": "MIT",
+      "homepage": "https://github.com/georgezhangtj/claude-orchestrate",
+      "repository": "https://github.com/georgezhangtj/claude-orchestrate",
+      "source": "./plugins/orchestrate"
+    }
+  ]
+}

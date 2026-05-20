@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OrchestratePlan",
+  "description": "Task graph for /orchestrate. Written by the planner during Phase 1 at <workspace>/plan.json. Adapted from Cursor's plan.schema.json minus Slack/cloud fields.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["goal", "rootSlug", "tasks"],
+  "properties": {
+    "goal": {
+      "type": "string",
+      "description": "Verbatim user goal, the full agent-facing text."
+    },
+    "rootSlug": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+      "description": "Kebab-case identifier; used in <workspace> path and as default scoping for descendants."
+    },
+    "baseBranch": {
+      "type": "string",
+      "description": "Default startingRef for tasks without their own. Typically the planner's current branch at kickoff."
+    },
+    "acceptanceCriteria": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Overall goal acceptance (optional)."
+    },
+    "tasks": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/PlanTask" }
+    }
+  },
+  "$defs": {
+    "PlanTask": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "type", "scopedGoal"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+          "description": "Kebab-case unique identifier within plan. Used as handoff filename and in Agent tool description."
+        },
+        "name": {
+          "type": "string",
+          "description": "Same as id; kept for parity with Cursor's schema."
+        },
+        "type": {
+          "enum": ["worker", "subplanner", "verifier"]
+        },
+        "scopedGoal": {
+          "type": "string",
+          "description": "Outcome the task must achieve. The only steering signal — worker reads this, plus acceptance, to know what to do."
+        },
+        "pathsAllowed": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Globs the task may modify. (Optional; default = no restriction.)"
+        },
+        "pathsForbidden": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Globs owned by siblings; worker must NOT touch."
+        },
+        "acceptance": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Acceptance criteria the worker must hit. Verifier targets check these too."
+        },
+        "verify": {
+          "type": "string",
+          "description": "Markdown verification recipe (Setup / Automated / Manual / Gotchas). Workers read as target behavior; verifiers inherit from target."
+        },
+        "startingRef": {
+          "type": "string",
+          "description": "Branch or ref the worker should reset its worktree to. Defaults to plan.baseBranch. For verifiers, auto-set by planner to target's branch after target hands off."
+        },
+        "dependsOn": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Upstream task ids. Gates spawn AND triggers context relay (upstream handoffs pasted into downstream spawn prompt). For verifiers, target id auto-added."
+        },
+        "measurements": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "command"],
+            "properties": {
+              "name": { "type": "string" },
+              "command": { "type": "string" }
+            },
+            "additionalProperties": false
+          },
+          "description": "Quantitative drift detection. Worker self-reports under ## Measurements; planner reruns each command on worker branch and flags >10% drift to attention.log."
+        },
+        "maxAttempts": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 2,
+          "description": "Caps automatic retries. Default 2."
+        },
+        "model": {
+          "type": "string",
+          "description": "Optional subagent model override (opus | sonnet | haiku). Useful for retry-with-different-model on tool-error failures."
+        },
+        "verifies": {
+          "type": "string",
+          "description": "Verifier-only. The target task id this verifier checks."
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "verifier" } } },
+          "then": { "required": ["verifies"] }
+        }
+      ]
+    }
+  }
+}
