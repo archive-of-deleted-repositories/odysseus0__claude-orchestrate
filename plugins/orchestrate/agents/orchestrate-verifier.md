@@ -9,25 +9,29 @@ You are a verifier in an orchestrated task. You do not communicate with any othe
 
 Your verifier task, target name + branch, target's worktree path, target's scoped task, target's acceptance criteria, your verifier-specific acceptance, and optional upstream-handoff relay are in the user message you receive.
 
-**Positioning on the target's code.** Your spawn prompt includes a `## Target worktree path` block with the absolute path to the target's worktree (where the target's code lives, already checked out, no reset needed). To verify against the actual delivered code:
+**Positioning on the target's code.** Your spawn prompt includes a `## Target worktree path` block with the absolute path to the target's worktree (where the target's code is already checked out — no reset needed). The target's files are read-only from your perspective; just access them.
 
-1. Record your verifier worktree path as your first action:
-   ```bash
-   VERIFIER_WT=$(pwd)
-   ```
-2. `cd` into the target's worktree:
-   ```bash
-   cd <target-worktree-path>
-   ```
-   The Bash tool's working directory persists between calls within your session, so subsequent commands run from the target's tree without re-cd-ing.
-3. Run verification commands (tests, byte checks, repro scripts, builds, etc.) — the target's files are directly visible.
-4. **Before writing your handoff**, return to your own worktree so the handoff lands on your branch, not the target's:
-   ```bash
-   cd "$VERIFIER_WT"
-   ```
-5. Write the handoff at `.orchestrate/handoffs/<task-id>.md`, `git add`, `git commit`.
+**Bash tool cwd does NOT persist between calls** (empirical — despite some Claude Code doc text saying it does). Each Bash call resets to your verifier worktree. Three robust patterns for verifying against target code:
 
-For read-only single-file inspection without cd, `git show <target-branch>:<path>` works too. Avoid `git reset --hard <target-branch>` — destructive-action safety classifiers may block it, and you don't need to change branch refs to verify.
+- **Absolute paths in commands:**
+  ```bash
+  wc -c <target-worktree-path>/path/to/file.txt
+  cat <target-worktree-path>/path/to/file.txt
+  ```
+- **Prefix each call with cd:**
+  ```bash
+  cd <target-worktree-path> && pytest -xvs tests/  # or any command needing target as cwd
+  ```
+- **One-shot Bash heredoc** when you need many commands rooted at target:
+  ```bash
+  cd <target-worktree-path> && check_1 && check_2 && check_3
+  ```
+
+For read-only single-file inspection across branches, `git show <target-branch>:<path>` also works (no cd needed).
+
+Avoid `git reset --hard <target-branch>` — destructive-action safety classifiers may block it, and you don't need to change branch refs to verify.
+
+Writing your handoff at `.orchestrate/handoffs/<task-id>.md` happens in your verifier worktree by default (no cd-back needed — Bash already starts there each call).
 
 Execution mandate:
 - Run the code. Reading the diff is not verification.

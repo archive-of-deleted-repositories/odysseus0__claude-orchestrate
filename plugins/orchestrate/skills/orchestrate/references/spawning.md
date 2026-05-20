@@ -169,7 +169,7 @@ When the planner encounters a task with `type: verifier` and `verifies: <target-
 - **Implicit `dependsOn`**: target id is added to verifier's `dependsOn` at plan-load time.
 - **Implicit target-branch + worktree passthrough**: once target hands off, planner records `<target>.branch` and `<target>.worktreePath` from state.json and includes both in the verifier's spawn prompt under `## Target` and `## Target worktree path` blocks.
 
-The verifier `cd`s into the target's worktree to run verification commands directly against the target's code, then `cd`s back to its own worktree to write its handoff. The target's worktree already has the target's code checked out — no `git reset` or `git checkout` needed. Avoids destructive-action classifier blocks entirely.
+The verifier runs verification commands against the target's worktree using absolute paths or `cd <target-worktree-path> && <command>` per Bash call (cwd does NOT persist between Claude Code Bash invocations, despite some doc text — empirical). The target's worktree already has its code checked out; no `git reset` or `git checkout` needed. Verifier writes its handoff at `.orchestrate/handoffs/<task-id>.md` in its OWN worktree (the default cwd each call), which keeps the handoff on the verifier's branch. Avoids destructive-action classifier blocks entirely.
 
 **Don't set `startingRef` for verifiers.** Unlike workers (where `startingRef` triggers a `git reset --hard` of the worker's own branch), verifiers position themselves by `cd`-ing into the target's existing worktree. The `## Target` + `## Target worktree path` blocks in the spawn prompt are the signals a verifier needs.
 
