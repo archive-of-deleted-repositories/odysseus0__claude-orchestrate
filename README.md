@@ -53,7 +53,7 @@ Then run `claude plugin marketplace add /absolute/path/to/this/repo` and `claude
     "claude-orchestrate": {
       "source": {
         "source": "github",
-        "repo": "<your-username>/claude-orchestrate"
+        "repo": "odysseus0/claude-orchestrate"
       }
     }
   },
