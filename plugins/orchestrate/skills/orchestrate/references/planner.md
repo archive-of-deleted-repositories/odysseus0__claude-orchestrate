@@ -73,7 +73,7 @@ verifies       — verifier only; target task name
 
 - **Merges are tasks.** Publish a worker whose `scopedGoal` says which branches to merge, conflict policy, and verification. `dependsOn` covers both branches; `startingRef` is one of them.
 - **Prefer a worker unless you can name the decomposition a subplanner would do.** Subplanners exist when the slice still has internal structure (multiple workers + their own merges/verifies). One worker can carry multi-file slices, multi-step refactors, full repro/fix/test cycles.
-- **Default to verifiers** for behavior-changing tasks. Use `type: verifier` and `verifies: <target-task-name>`. Don't manually wire `startingRef` or `dependsOn` for verifiers — planner auto-wires them after the target hands off.
+- **Default to verifiers** for behavior-changing tasks. Use `type: verifier` and `verifies: <target-task-name>`. Don't manually wire `dependsOn` — planner auto-wires it after the target hands off, and includes the target's branch in the verifier's `## Target` block. Verifiers position via `git checkout <target-branch> -- .` (file-tree level), not via `startingRef` reset (which is for workers only).
 - **`measurements[]`** for quantitative claims. Planner reruns each command on the worker's branch after handoff; >10% drift or unit mismatch → `attention.log`.
 - **Keep fan-in small.** If a task needs many upstream handoffs, publish an aggregation worker first (otherwise the downstream spawn prompt bloats).
 - **Minimize path overlap.** List `pathsForbidden` when sibling ownership matters.

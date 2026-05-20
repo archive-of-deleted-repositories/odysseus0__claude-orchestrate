@@ -167,9 +167,11 @@ Use `dependsOn` whenever a downstream task needs upstream context, even if Git-l
 
 When the planner encounters a task with `type: verifier` and `verifies: <target-id>`:
 - **Implicit `dependsOn`**: target id is added to verifier's `dependsOn` at plan-load time.
-- **Implicit `startingRef`**: once target hands off, planner sets verifier's `startingRef` to `<target>.branch` from state.json before spawning.
+- **Implicit target-branch passthrough**: once target hands off, planner records `<target>.branch` from state.json and includes it in the verifier's spawn prompt under `## Target` (e.g. `\`target-name\` on branch \`<actual branch>\``).
 
-The verifier then `git reset --hard <target-branch>` as its first action and verifies on the actual delivered code.
+The verifier brings the target's content into its own worktree via `git checkout <target-branch> -- .` as its first action — this is the supported positioning pattern (plain `git reset --hard <target-branch>` may be blocked by destructive-action safety classifiers). For read-only file inspection without modifying its own worktree, the verifier can also use `git show <target-branch>:<path>`.
+
+**Don't set `startingRef` for verifiers.** Unlike workers (where `startingRef` triggers a `git reset --hard` of the worker's own branch), verifiers position themselves at the file-tree level, not the branch-ref level. The `## Target` block in the spawn prompt is the only signal a verifier needs.
 
 ## State persistence per task
 
