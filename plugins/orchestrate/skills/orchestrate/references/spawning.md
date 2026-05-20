@@ -167,11 +167,11 @@ Use `dependsOn` whenever a downstream task needs upstream context, even if Git-l
 
 When the planner encounters a task with `type: verifier` and `verifies: <target-id>`:
 - **Implicit `dependsOn`**: target id is added to verifier's `dependsOn` at plan-load time.
-- **Implicit target-branch passthrough**: once target hands off, planner records `<target>.branch` from state.json and includes it in the verifier's spawn prompt under `## Target` (e.g. `\`target-name\` on branch \`<actual branch>\``).
+- **Implicit target-branch + worktree passthrough**: once target hands off, planner records `<target>.branch` and `<target>.worktreePath` from state.json and includes both in the verifier's spawn prompt under `## Target` and `## Target worktree path` blocks.
 
-The verifier brings the target's content into its own worktree via `git checkout <target-branch> -- .` as its first action — this is the supported positioning pattern (plain `git reset --hard <target-branch>` may be blocked by destructive-action safety classifiers). For read-only file inspection without modifying its own worktree, the verifier can also use `git show <target-branch>:<path>`.
+The verifier `cd`s into the target's worktree to run verification commands directly against the target's code, then `cd`s back to its own worktree to write its handoff. The target's worktree already has the target's code checked out — no `git reset` or `git checkout` needed. Avoids destructive-action classifier blocks entirely.
 
-**Don't set `startingRef` for verifiers.** Unlike workers (where `startingRef` triggers a `git reset --hard` of the worker's own branch), verifiers position themselves at the file-tree level, not the branch-ref level. The `## Target` block in the spawn prompt is the only signal a verifier needs.
+**Don't set `startingRef` for verifiers.** Unlike workers (where `startingRef` triggers a `git reset --hard` of the worker's own branch), verifiers position themselves by `cd`-ing into the target's existing worktree. The `## Target` + `## Target worktree path` blocks in the spawn prompt are the signals a verifier needs.
 
 ## State persistence per task
 
