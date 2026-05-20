@@ -14,3 +14,23 @@ Loop hygiene:
 - After publishing tasks and surfacing the plan for user approval, enter the reconcile loop: spawn ready tasks (workers/verifiers via Agent tool; subplanners via `Bash(claude-bg-wait …)`), wait for handoffs, persist state, repeat until no pending task is reachable.
 - On any task transitioning to `error`: read the synthetic failure handoff at `<workspace>/handoffs/<task>-failure.md`, decide retry / split / escalate / drop, then continue. Each retry costs another spawn — after 2 attempts on the same task, prefer abandon (drop from plan.json, replan around it) over a 3rd attempt unless you have specific evidence the next retry will succeed.
 - Don't end your turn while this workspace has non-terminal tasks.
+
+After publishing the plan, surface this to the user verbatim so they know the pause-control:
+
+```
+This run is now driving. If you want to halt new spawns mid-run (e.g.
+you spot bad upstream output or a runaway decomposition), open another
+terminal and run:
+
+    touch .orchestrate/<rootSlug>/andon
+
+I'll see it before the next spawn cycle, pause new spawns, and wait.
+In-flight work finishes; nothing new starts. To resume:
+
+    rm .orchestrate/<rootSlug>/andon
+
+This is the Andon cord — pause-not-kill. It works whether you're
+watching this terminal or away.
+```
+
+(Substitute the actual rootSlug into the snippet.)

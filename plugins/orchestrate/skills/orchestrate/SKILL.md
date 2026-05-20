@@ -11,8 +11,8 @@ Adapted from Cursor's `/orchestrate` skill ([cursor/plugins/orchestrate](https:/
 
 - No dispatcher. The Claude Code session is local; it IS the root planner.
 - Workers/verifiers spawn via Claude Code's `Agent` tool with `isolation: "worktree"` (in-process, fresh subagent session, isolated worktree at `<repo>/.claude/worktrees/agent-<id>/`).
-- Subplanners spawn via `claude --bg` (daemon-supervised top-level session, full Agent tool access — required for the subplanner to itself spawn workers). The `claude-bg-wait` wrapper script (bundled in this plugin's `scripts/`) provides a synchronous interface.
-- No Slack, no Andon (user is in-session; Ctrl-C is the emergency stop).
+- Subplanners spawn via `claude --bg` (daemon-supervised top-level session, full Agent tool access — required for the subplanner to itself spawn workers). The `claude-bg-wait` wrapper script (bundled in this plugin's `bin/`) provides a synchronous interface.
+- No Slack. **Andon (cross-tree pause) is file-based:** the operator touches `.orchestrate/<rootSlug>/andon` from any terminal to halt new spawns across the tree; removing the file resumes. Every planner (root + all subplanner descendants) checks the root's andon file before each spawn cycle. See `references/planner.md` Phase 2 sweep step 0.
 - No subprocess heartbeat; the planner's own turn drives the loop.
 
 ## Core principles

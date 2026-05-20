@@ -103,6 +103,20 @@ Your turn IS the heartbeat. There is no subprocess.
 
 ### Sweep step
 
+0. **Andon check (cross-tree pause).** Before computing the ready set this sweep, check whether the root planner's andon flag file exists. The file path:
+   - Root planner: `<your-workspace>/andon` (e.g. `.orchestrate/<rootSlug>/andon`).
+   - Subplanner: the absolute path provided in your spawn prompt under `## Root workspace path` + `/andon`.
+
+   If the file exists:
+   - **Do not spawn anything new this sweep.** In-flight workers/verifiers/subplanners continue (you can't halt them mid-run from here, and that's fine — Andon pauses new work, doesn't kill in-flight work).
+   - Surface to the operator (root): "Andon active. Pausing new spawns. Remove `<workspace>/andon` to resume."
+   - Subplanner: append `andon active` to your `<workspace>/attention.log` (the operator can `tail -f` it).
+   - Block via `Bash(sleep 15)` and re-check. Loop until the andon file is removed, then resume sweeping.
+
+   The andon mechanism lets the operator pause a long-running tree from any terminal (`touch .orchestrate/<rootSlug>/andon`) without killing the planner session — useful when they spot bad upstream output, broken acceptance, or a runaway decomposition. Removing the file (`rm .orchestrate/<rootSlug>/andon`) resumes the loop on the next sweep tick.
+
+   Cross-tree pause: every planner in the tree checks the **root's** andon file (not its own). One touch pauses the entire tree, root and all subplanner descendants. Subplanners learn the root's workspace path from their spawn prompt.
+
 1. **Compute ready set**: tasks where `status == pending` AND every `dependsOn` id has `status == handed-off` AND `attempts < maxAttempts`.
 2. **Termination check**: if ready is empty AND no task has `status == running`:
    - If any task is still `pending`, list them with their unsatisfied deps; write attention.log entries; break out of the loop.

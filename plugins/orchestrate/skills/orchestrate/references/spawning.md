@@ -134,6 +134,11 @@ When you finish, write your aggregated handoff to: `<absolute-path-to-parent-wor
 
 This file path is in the parent planner's workspace, which is in your cwd. The parent reads from this exact path after you exit. Do not write to anywhere else for the handoff.
 
+## Root workspace path
+<absolute-path-to-root-workspace>
+
+Check `<root-workspace-path>/andon` before each spawn cycle in your reconcile loop. If the file exists, pause new spawns and wait until it's removed (see `references/planner.md` Phase 2 sweep step 0). One andon file at the root level pauses every planner in the tree; the operator can drop or remove it from any terminal.
+
 ## Task id
 <task.id>
 
