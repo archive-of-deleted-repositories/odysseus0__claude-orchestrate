@@ -81,10 +81,10 @@ verifies       — verifier only; target task name
 
 Then write `<workspace>/state.json` with each task `status: pending`, `attempts: 0`, `branch: null`, `worktreePath: null`.
 
-**Atomic writes for plan.json and state.json.** Use the bundled `orchestrate-state-write` helper (`${CLAUDE_PLUGIN_ROOT}/scripts/orchestrate-state-write`) to write state-critical JSON files. It writes to a sibling tempfile and atomically renames over the target, so no mid-write crash can leave a truncated state file on disk. Pattern:
+**Atomic writes for plan.json and state.json.** Use the bundled `orchestrate-state-write` helper (on PATH automatically — plugin `bin/` is in PATH) for state-critical JSON files. It writes to a sibling tempfile and atomically renames over the target, so no mid-write crash can leave a truncated state file on disk. Pattern:
 
 ```bash
-cat <<'JSON' | "${CLAUDE_PLUGIN_ROOT}/scripts/orchestrate-state-write" <workspace>/state.json
+cat <<'JSON' | orchestrate-state-write <workspace>/state.json
 {
   "...": "..."
 }
@@ -111,7 +111,7 @@ Your turn IS the heartbeat. There is no subprocess.
 4. **Mark tasks running** in state.json: `status: running`, increment `attempts`, set `startedAt`. Persist.
 5. **Spawn ready tasks**. Substrate depends on type:
    - **worker** / **verifier**: `Agent(subagent_type: "orchestrate:orchestrate-worker" | "orchestrate:orchestrate-verifier", isolation: "worktree", description: "<rootSlug>/<task-name>", prompt: <rendered>)`. Emit multiple calls in a single assistant message to parallelize.
-   - **subplanner**: `Bash(command: "\"${CLAUDE_PLUGIN_ROOT}/scripts/claude-bg-wait\" \"$(cat <spawn-prompt-file>)\"")`. The bg session is a fresh top-level Claude Code session with full Agent tool access — it can recursively spawn its own workers + further subplanners. Spawn-prompt file lives at `<workspace>/spawns/<task-id>.md` (write it as part of step 3). One Bash call per subplanner. Multiple Bash calls in one message parallelize them. (`${CLAUDE_PLUGIN_ROOT}` is set per-session to the plugin's install dir; no PATH symlink needed.)
+   - **subplanner**: `Bash(command: "claude-bg-wait \"$(cat <spawn-prompt-file>)\"")`. The bg session is a fresh top-level Claude Code session with full Agent tool access — it can recursively spawn its own workers + further subplanners. Spawn-prompt file lives at `<workspace>/spawns/<task-id>.md` (write it as part of step 3). One Bash call per subplanner. Multiple Bash calls in one message parallelize them. (`claude-bg-wait` is the plugin's bundled wrapper; it's on PATH because Claude Code adds every installed plugin's `bin/` directory to PATH automatically.)
 6. **Process each result**:
    - For workers/verifiers: parse `worktreePath`, `worktreeBranch`, `agentId` from Agent tool result metadata. `Read` `<worktreePath>/.orchestrate/handoffs/<task-id>.md`. Copy to `<workspace>/handoffs/<task-id>.md`.
    - For subplanners: the subplanner wrote its handoff to a path you specified in its spawn prompt (under `## Handoff file path`). Convention: tell it to write to `<workspace>/handoffs/<task-id>.md` (the bg session inherited your cwd, so it has access). Read that file.

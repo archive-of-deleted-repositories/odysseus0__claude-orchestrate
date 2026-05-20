@@ -48,6 +48,8 @@ Parse these lines. Persist `agentId`, `worktreePath`, `worktreeBranch` to state.
 ## Paths you must NOT modify
 <task.pathsForbidden, one per line, or "(none)">
 
+(Note: even if `pathsForbidden` lists `.orchestrate/**` or a parent thereof, the worker's own handoff file at `.orchestrate/handoffs/<task-id>.md` in its worktree is implicitly carved out — the worker writes that as part of its role contract, not as part of task work. Don't list `.orchestrate/handoffs/<task-id>.md` in pathsForbidden under any circumstance.)
+
 ## Acceptance criteria
 - <criterion 1>
 - <criterion 2>
@@ -80,11 +82,11 @@ The worker / verifier system prompt (loaded automatically when the subagent type
 
 ```
 Bash(
-  command = "\"${CLAUDE_PLUGIN_ROOT}/scripts/claude-bg-wait\" \"$(cat <workspace>/spawns/<task-id>.md)\""
+  command = "claude-bg-wait \"$(cat <workspace>/spawns/<task-id>.md)\""
 )
 ```
 
-`claude-bg-wait` is bundled in this plugin's `scripts/` directory. Claude Code sets `${CLAUDE_PLUGIN_ROOT}` per-session to the active plugin's install directory, so the planner's Bash invocation resolves the absolute path at runtime — no PATH symlink needed. It spawns `claude --bg <prompt>`, polls until the bg session is idle-stable, prints session logs to stdout, then `claude stop`s the session. The bg session is a fresh top-level Claude Code session — full Agent tool access (so it can recursively spawn its own workers + further subplanners).
+`claude-bg-wait` is bundled in this plugin's `bin/` directory. Claude Code prepends every installed plugin's `bin/` directory to PATH at session start, so the wrapper is callable as a bare command name — no `${CLAUDE_PLUGIN_ROOT}` prefix needed, no PATH symlink dance. It spawns `claude --bg <prompt>`, polls until the bg session is idle-stable, prints session logs to stdout, then `claude stop`s the session. The bg session is a fresh top-level Claude Code session — full Agent tool access (so it can recursively spawn its own workers + further subplanners).
 
 **The bg session's stdout from `claude logs` is noisy** (raw TUI output with ANSI escapes). Don't try to parse it for the handoff. Instead, the subplanner spawn prompt tells the subplanner to write its handoff to a file path you specify, and you `Read` that file after `claude-bg-wait` returns.
 
