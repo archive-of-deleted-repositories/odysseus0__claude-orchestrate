@@ -1,4 +1,5 @@
 {
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "claude-orchestrate",
   "owner": {
     "name": "George Zhang"
@@ -17,7 +18,6 @@
       },
       "license": "MIT",
       "homepage": "https://github.com/georgezhangtj/claude-orchestrate",
-      "repository": "https://github.com/georgezhangtj/claude-orchestrate",
       "source": "./plugins/orchestrate"
     }
   ]

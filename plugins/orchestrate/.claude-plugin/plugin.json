@@ -1,10 +1,7 @@
 {
   "name": "orchestrate",
-  "description": "Decompose a large goal into a tree of parallel workers running in isolated git worktrees, collect typed handoffs, replan, repeat until terminal. Idiomatic Claude Code realization of Cursor /orchestrate. Provides /orchestrate:orchestrate, the orchestrate:orchestrate skill, and orchestrate:orchestrate-{planner,worker,verifier} subagents.",
-  "version": "0.1.0",
+  "description": "Decompose a large goal into a tree of parallel workers running in isolated git worktrees, collect typed handoffs, replan, repeat until terminal. Idiomatic Claude Code realization of Cursor /orchestrate.",
   "author": {
     "name": "George Zhang"
-  },
-  "license": "MIT",
-  "homepage": "https://github.com/georgezhangtj/claude-orchestrate"
+  }
 }
